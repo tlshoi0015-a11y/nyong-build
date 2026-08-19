@@ -117,7 +117,7 @@ MOUSEEVENTF_RIGHTUP = 0x0010
 INPUT_MOUSE = 0
 
 def send_input_right_click_held():
-    """우클릭을 누른 채로 충분히 인식될 시간을 주는 함수"""
+    """우클릭을 0.15초 동안 누른 채로 유지하여 확실히 인식시키는 함수"""
     extra = ctypes.c_ulong(0)
     
     # 우클릭 누름
@@ -126,8 +126,8 @@ def send_input_right_click_held():
     x_down = Input(INPUT_MOUSE, ii_down)
     ctypes.windll.user32.SendInput(1, ctypes.pointer(x_down), ctypes.sizeof(x_down))
     
-    # 서버가 씹지 않고 확실히 인식하도록 약간의 시간 유지 (약 0.05초~0.08초)
-    time.sleep(0.06)
+    # 서버가 씹지 않고 확실히 인식하도록 0.15초 유지
+    time.sleep(0.15)
     
     # 우클릭 뗌
     ii_up = Input_I()
@@ -239,7 +239,7 @@ def open_gui_with_right_click(timeout=10):
     running = False
     return False
 
-# [2단계] 작물 클릭 및 충분한 입력 유지 후 안전지대 대피
+# [2단계] 작물 클릭 및 0.15초 유지 후 안전지대 대피
 def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, timeout=10):
     start = time.perf_counter()
     print('[진행] 재료 찾기 시도')
@@ -257,17 +257,17 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
             target_loc = None
             
         if target_loc:
-            print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 안정적인 우클릭 시도')
+            print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 0.15초 안정 우클릭 시도')
             move_mouse(target_loc.x, target_loc.y)
             
-            # 💡 핵심 수정: 우클릭을 씹히지 않게 충분한 시간 동안 누르고 있기 (Win32 API 활용)
+            # 우클릭 0.15초 동안 확실히 누르고 있기
             if USE_WIN32:
                 send_input_right_click_held()
             else:
                 pyautogui.click(button='right')
-                time.sleep(0.06)
+                time.sleep(0.15)
             
-            # 우클릭 인식이 끝난 후, 툴팁 가림 방지를 위해 마우스를 안전지대(500, 500)로 대피
+            # 우클릭이 끝난 후, 툴팁 가림 방지를 위해 마우스를 안전지대(500, 500)로 대피
             move_mouse(SAFE_X, SAFE_Y)
             
             # 서버가 재료를 그릇에 올릴 수 있도록 여유 있게 대기
@@ -360,7 +360,7 @@ def do_cycle():
 
     time.sleep(FAST_DELAY)
 
-    # 2단계: 작물 안정적 우클릭 -> 툴팁 피신 -> 그릇 검증 -> 연타 버튼 이동
+    # 2단계: 작물 우클릭(0.15초) -> 툴팁 피신 -> 그릇 검증 -> 연타 버튼 이동
     sw_location = click_crop_and_verify_upload(TARGET_IMAGE, BOWL_IMAGE, SW_IMAGE, timeout=SEARCH_TIMEOUT)
     if not sw_location or not running:
         return
@@ -406,7 +406,7 @@ def exit_program():
 def main():
     check_authorized_pc()
     print('========================================')
-    print('nyong.exe 매크로 실행됨 (우클릭 유지 및 툴팁 방지 버전)')
+    print('nyong.exe 매크로 실행됨 (우클릭 0.15초 유지 버전)')
     print('F8: 시작 / 정지, F9: 종료')
     print('========================================\n')
     
