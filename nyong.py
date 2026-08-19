@@ -178,25 +178,16 @@ def image_watcher_thread(f_template, f_confidence, check_interval=0.05):
             return
         time.sleep(check_interval)
 
-# [1단계] UI 열기 검증
+# [1단계] 반드시 도마 또는 싱크대 UI가 열려 있는지 엄격하게 검증
 def open_gui_with_right_click(timeout=10):
     start = time.perf_counter()
     print('\n[진행] 조리대/싱크대 열기 시도')
     sink_path = os.path.join(BASE_DIR, SINK_IMAGE)
     board_path = os.path.join(BASE_DIR, CUTTING_BOARD_IMAGE)
-    target_path = os.path.join(BASE_DIR, TARGET_IMAGE)
 
     while time.perf_counter() - start < timeout:
         if not running or check_lobby_and_stop():
             return False
-
-        if os.path.exists(target_path):
-            try:
-                if pyautogui.locateCenterOnScreen(target_path, confidence=CONFIDENCE_TARGET, grayscale=True):
-                    print('[성공] 작물 감지됨 - UI 이미 열림 확인')
-                    return True
-            except pyautogui.ImageNotFoundException:
-                pass
 
         is_sink_open = False
         is_board_open = False
@@ -215,15 +206,19 @@ def open_gui_with_right_click(timeout=10):
             except pyautogui.ImageNotFoundException:
                 pass
 
+        # 도마나 싱크대 UI가 확실히 화면에 감지된 경우에만 통과
         if is_sink_open or is_board_open:
-            print('[성공] UI(도마 또는 싱크대) 열림 확인됨')
+            print('[성공] 도마 또는 싱크대 UI 열림 확인됨')
             return True
 
+        # UI가 아직 안 열렸다면 우클릭으로 열기 시도
         pyautogui.click(button='right')
         time.sleep(FAST_DELAY)
         print('[렉 감지] UI 감지 재시도 중...')
     
-    print('[실패] UI 열기 타임아웃')
+    print('[실패] 도마/싱크대 UI 열기 타임아웃 - 매크로를 중지합니다.')
+    global running
+    running = False
     return False
 
 # [2단계] 재료 찾기 및 우클릭 (1초 이상 그릇 안 사라지면 (500,500) 대피, 10회 실패 시 종료)
@@ -247,13 +242,12 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
             target_loc = None
             
         if target_loc:
-            # 만약 실패 횟수가 1회 이상 쌓였다면 툴팁 가림 방지를 위해 (500, 500)으로 대피 후 우클릭
+            # 실패 횟수가 1회 이상 쌓였다면 툴팁 가림 방지를 위해 (500, 500)으로 대피 후 우클릭
             if fail_count > 0:
                 print(f'[안내] 툴팁 가림/렉 의심 - 마우스를 (500, 500)으로 대피 후 재시도 ({fail_count}/10)')
                 move_mouse(SAFE_X, SAFE_Y)
                 time.sleep(0.1)
                 
-                # 대피 상태에서 작물 위치로 이동하여 깔끔하게 우클릭 (드래그 방지)
                 move_mouse(target_loc.x, target_loc.y)
                 time.sleep(0.05)
                 pyautogui.click(button='right')
@@ -269,7 +263,7 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
             # 그릇 사라짐 확인 (1초 동안 주기적으로 체크)
             bowl_vanished = False
             check_start = time.perf_counter()
-            while time.perf_counter() - check_start < 1.0:  # 1초 동안 대기하며 그릇 감시
+            while time.perf_counter() - check_start < 1.0:
                 bowl_exists = False
                 if os.path.exists(bowl_full_path):
                     try:
@@ -286,7 +280,6 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
             if bowl_vanished:
                 print('[성공] 그릇 이미지 사라짐 확인! (재료 올라감)')
                 
-                # 조리 시작 버튼 위치 찾기
                 try:
                     sw_loc = pyautogui.locateCenterOnScreen(sw_full_path, confidence=CONFIDENCE, grayscale=True)
                     if sw_loc:
@@ -301,7 +294,6 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
                 fail_count += 1
                 print(f'[경고/렉 감지] 1초 이상 그릇이 그대로 있음 ({fail_count}/10회 실패)')
                 
-                # 10회 연속 실패 시 손질을 다 끝낸 것으로 판단하고 매크로 정지
                 if fail_count >= 10:
                     print('\n[완료] 재료 손질이 모두 끝났습니다. 매크로를 정지합니다.')
                     running = False
@@ -363,7 +355,7 @@ def do_cycle():
     if check_lobby_and_stop():
         return
 
-    # 1단계: UI 열림 검증
+    # 1단계: 도마/싱크대 UI 열림 필수 검증
     if not open_gui_with_right_click(timeout=SEARCH_TIMEOUT):
         return
 
