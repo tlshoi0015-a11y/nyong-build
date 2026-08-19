@@ -213,7 +213,7 @@ def open_gui_with_right_click(timeout=10):
     print('[실패] UI 열기 타임아웃')
     return False
 
-# [2단계] 작물 우클릭 -> 0.05초 대기 후 이동 -> 0.2초 후 그릇 사라짐 검증 -> 0.2초 후 연타 버튼 이동
+# [2단계] 작물 발견 위치에서 제자리 우클릭 ➔ 0.2초 대기 ➔ 그릇 사라짐 검증 ➔ 0.2초 대기 ➔ 연타 버튼 이동
 def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, timeout=10):
     start = time.perf_counter()
     print('[진행] 재료 찾기 시도')
@@ -231,19 +231,15 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
             target_loc = None
             
         if target_loc:
-            print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 우클릭 실행')
+            print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 제자리 우클릭')
             
-            # 1. 클릭 확실히 전달
+            # 1. 이동 치우기 없이 위치에서 즉시 우클릭
             pyautogui.click(target_loc.x, target_loc.y, button='right')
-            time.sleep(0.05)
             
-            # 2. 커서 살짝 이동
-            pyautogui.moveTo(target_loc.x + 20, target_loc.y + 20)
-            
-            # 3. 우클릭 반응 대기 (0.2초)
+            # 2. 우클릭 후 0.2초 대기
             time.sleep(FAST_DELAY)
 
-            # 4. 그릇 이미지 감지 여부 확인
+            # 3. 그릇 이미지 감지 여부 확인 (작물이 등록되면 그릇 이미지가 사라짐)
             bowl_exists = False
             if os.path.exists(bowl_full_path):
                 try:
@@ -255,7 +251,7 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
             if not bowl_exists:
                 print('[성공] 그릇 이미지 사라짐 확인! (재료 올라감)')
                 
-                # 5. 이동 전 대기 (0.2초)
+                # 4. 연타 버튼 이동 전 0.2초 대기
                 time.sleep(FAST_DELAY)
                 
                 # 조리 시작 버튼 찾기
@@ -334,7 +330,7 @@ def do_cycle():
 
     time.sleep(FAST_DELAY)
 
-    # 2단계: 작물 우클릭 -> 0.2초 후 그릇 사라짐 검증 -> 0.2초 후 연타 버튼 이동
+    # 2단계: 작물 제자리 우클릭 -> 0.2초 후 그릇 사라짐 검증 -> 0.2초 후 연타 버튼 이동
     sw_location = click_crop_and_verify_upload(TARGET_IMAGE, BOWL_IMAGE, SW_IMAGE, timeout=SEARCH_TIMEOUT)
     if not sw_location or not running:
         return
@@ -380,7 +376,7 @@ def exit_program():
 def main():
     check_authorized_pc()
     print('========================================')
-    print('nyong.exe 매크로 실행됨 (속도 최적화: 0.2s)')
+    print('nyong.exe 매크로 실행됨 (제자리 우클릭 적용)')
     print('F8: 시작 / 정지, F9: 종료')
     print('========================================\n')
     
