@@ -1,4 +1,4 @@
-# nyong.py - Minecraft Auto Cooking Macro (External Images)
+# nyong.py - Minecraft Auto Cooking Macro
 global fast_clicking
 global running
 global stop_program
@@ -35,25 +35,25 @@ def check_authorized_pc():
 # 이미지 파일명 정의 (.exe 파일과 같은 폴더에 위치해야 함)
 TARGET_IMAGE = 'target2.png'          # 재료 이미지
 SINK_IMAGE = 'sink.png'               # 싱크대 UI 이미지
-CUTTING_BOARD_IMAGE = 'cutting_board.png' # 도마 UI 이미지 (추가됨)
+CUTTING_BOARD_IMAGE = 'cutting_board.png' # 도마 UI 이미지
 SW_IMAGE = 'sw2.png'                 # 조리 시작 버튼 이미지
-EMPTY_SLOT_IMAGE = 'empty_slot.png'   # 클릭 후 빈 슬롯 이미지
 LOBBY_IMAGE = 'lobby.png'             # 로비 감지 이미지
 
 SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
 REGION = (0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
 
 # [정밀도 및 딜레이 설정]
-CONFIDENCE = 0.5           # 완료/버튼 기본 인식 정확도 (90% 유지)
+CONFIDENCE = 0.9           # 완료/버튼 기본 인식 정확도 (90% 유지)
 CONFIDENCE_TARGET = 0.80   # 작물 이미지 인식 정확도 (80% 적용)
-CONFIDENCE_UI = 0.50       # UI 및 빈 슬롯 인식 정확도
+CONFIDENCE_UI = 0.70       # UI 인식 정확도
 
-DELAY_EMPTY_TO_ACTION = 0.5  # 빈 슬롯 확인 후 연타/다지기 시작전 대기 (0.5초)
-DELAY_DEFAULT = 0.3          # 기본 대기시간 (0.3초)
+# ⏱️ 요청하신 딜레이 설정
+DELAY_AFTER_RIGHT_CLICK = 0.5  # 1. 재료 누르고 색상 변화 체크 전 대기 (0.5초)
+DELAY_BEFORE_SW_CLICK = 0.5    # 2. 검증 후 연타 버튼으로 이동 전 대기 (0.5초)
+DELAY_DEFAULT = 0.3            # 3. 기타 동작 대기 (0.3초)
 
 SEARCH_TIMEOUT = 10
 SEARCH_POLL_INTERVAL = 0.02
-STEP_DELAY = 0.3           # 단계별 대기시간 0.3초로 조율
 LOOP_INTERVAL = 1.0        # 사이클 완료 후 대기시간 1.0초
 
 BASE_DIR = get_base_dir()
@@ -169,7 +169,7 @@ def image_watcher_thread(f_template, f_confidence, check_interval=0.1):
             return
         time.sleep(check_interval)
 
-# [1단계] 우클릭 후 조리대/싱크대 UI(cutting_board.png 또는 sink.png) 열림 확인
+# [1단계] 우클릭 후 조리대/싱크대 UI 열림 확인
 def open_gui_with_right_click(timeout=10):
     start = time.perf_counter()
     print('\n[진행] 조리대/싱크대 열기 시도 (우클릭)')
@@ -181,9 +181,8 @@ def open_gui_with_right_click(timeout=10):
             return False
         
         pyautogui.click(button='right')
-        time.sleep(DELAY_DEFAULT)
+        time.sleep(DELAY_DEFAULT)  # 0.3초 대기
 
-        # 도마 또는 싱크대 이미지 둘 중 하나라도 탐지되면 성공
         is_sink_open = False
         is_board_open = False
 
@@ -205,7 +204,6 @@ def open_gui_with_right_click(timeout=10):
             print('[성공] UI(도마 또는 싱크대) 열림 확인됨')
             return True
 
-        # 두 파일이 전부 폴더에 없을 경우 바로 넘어가기 예외처리
         if not os.path.exists(sink_path) and not os.path.exists(board_path):
             print('[안내] UI 이미지 파일 없음 - 검수 없이 진행')
             return True
@@ -215,56 +213,60 @@ def open_gui_with_right_click(timeout=10):
     print('[실패] UI 열기 타임아웃')
     return False
 
-# [2단계] 재료(target2.png) 클릭 후, 그 클릭 지점이 빈 슬롯(empty_slot.png)으로 변했는지 집중 검증
-def click_and_verify_upload(target_img_path, sw_img_path, timeout=10):
+# [2단계] 작물 클릭 ➔ 0.5초 후 색상 변경 체크 ➔ 0.5초 후 연타 버튼으로 이동
+def click_crop_and_verify_upload(target_img_path, sw_img_path, timeout=10):
     start = time.perf_counter()
-    print('[진행] 재료 찾기 및 빈 슬롯 검증 시도')
+    print('[진행] 재료 찾기 시도')
     target_full_path = os.path.join(BASE_DIR, target_img_path)
-    empty_path = os.path.join(BASE_DIR, EMPTY_SLOT_IMAGE)
+    sw_full_path = os.path.join(BASE_DIR, sw_img_path)
 
     while time.perf_counter() - start < timeout:
         if not running or check_lobby_and_stop():
             return None
         
         try:
-            # 작물 인식은 정밀도 0.80(CONFIDENCE_TARGET) 적용
             target_loc = pyautogui.locateCenterOnScreen(target_full_path, confidence=CONFIDENCE_TARGET, grayscale=True)
         except pyautogui.ImageNotFoundException:
             target_loc = None
             
         if target_loc:
-            print('[동작] 작물 발견 -> 우클릭 시도')
-            pyautogui.click(target_loc.x, target_loc.y, button='right')
-            time.sleep(DELAY_DEFAULT)  # 우클릭 반응 대기 0.3초
+            # 1. 클릭 전 좌표 색상(RGB) 미리 보관
+            before_color = pyautogui.pixel(int(target_loc.x), int(target_loc.y))
             
-            # 클릭했던 마우스 위치(target_loc) 기준 60x60 영역 검사 (빈 칸 검증 필수)
-            is_empty = False
-            if os.path.exists(empty_path):
-                try:
-                    search_box = (int(target_loc.x - 15), int(target_loc.y - 15), 30, 30)
-                    if pyautogui.locateOnScreen(empty_path, region=search_box, confidence=CONFIDENCE_UI, grayscale=True):
-                        print('[성공] 클릭 위치 빈 슬롯 확인됨')
-                        is_empty = True
-                except pyautogui.ImageNotFoundException:
-                    pass
-            else:
-                is_empty = True
+            print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 우클릭 실행')
+            pyautogui.click(target_loc.x, target_loc.y, button='right')
+            
+            # 2. 우클릭 후 0.5초 대기
+            print(f'[대기] 색상 변경 검증 전 {DELAY_AFTER_RIGHT_CLICK}초 대기...')
+            time.sleep(DELAY_AFTER_RIGHT_CLICK)
 
-            # 빈 슬롯이 확인되지 않았다면 (우클릭 씹힘) 절대 다지기 연타로 진입하지 않고 우클릭 재시도
-            if not is_empty:
-                print('[경고/렉 감지] 우클릭이 씹혀 빈 슬롯이 되지 않음! 다지기 취소 및 재시도...')
+            # 3. 우클릭 후 색상 감지 및 비교
+            after_color = pyautogui.pixel(int(target_loc.x), int(target_loc.y))
+
+            color_changed = False
+            if abs(before_color[0] - after_color[0]) > 15 or \
+               abs(before_color[1] - after_color[1]) > 15 or \
+               abs(before_color[2] - after_color[2]) > 15:
+                color_changed = True
+
+            if color_changed:
+                print('[성공] 재료 등록 완료! (색상 변경 감지됨)')
+                print(f'[대기] 연타 버튼으로 이동 전 {DELAY_BEFORE_SW_CLICK}초 대기...')
+                time.sleep(DELAY_BEFORE_SW_CLICK)
+                
+                # 조리 버튼 좌표 찾기
+                try:
+                    sw_loc = pyautogui.locateCenterOnScreen(sw_full_path, confidence=CONFIDENCE, grayscale=True)
+                    if sw_loc:
+                        return sw_loc
+                    else:
+                        print('[경고] 조리 버튼(sw2.png)을 찾을 수 없음')
+                except pyautogui.ImageNotFoundException:
+                    print('[경고] 조리 버튼(sw2.png) 이미지 검색 실패')
+            else:
+                print('[경고/렉 감지] 우클릭이 씹혀 재료가 남아있음! 재시도...')
                 time.sleep(DELAY_DEFAULT)
                 continue
-
-            # 빈 슬롯 확인 성공시에만 조리(sw2.png) 버튼 감지
-            try:
-                sw_loc = pyautogui.locateCenterOnScreen(os.path.join(BASE_DIR, sw_img_path), confidence=CONFIDENCE, grayscale=True)
-                if sw_loc:
-                    print(f'[성공] 조리 버튼 감지 완료! 연타 시작 전 {DELAY_EMPTY_TO_ACTION}초 대기')
-                    time.sleep(DELAY_EMPTY_TO_ACTION)  # 요청하신 빈 슬롯 확인 후 연타 시작 전 0.5초 대기
-                    return sw_loc
-            except pyautogui.ImageNotFoundException:
-                print('[경고] 조리 버튼(sw2.png)을 찾을 수 없음. 재시도...')
         
         time.sleep(SEARCH_POLL_INTERVAL)
         
@@ -322,18 +324,18 @@ def do_cycle():
     if check_lobby_and_stop():
         return
 
-    # 1단계: UI 열림 검증 (cutting_board.png 또는 sink.png)
+    # 1단계: UI 열림 검증
     if not open_gui_with_right_click(timeout=SEARCH_TIMEOUT):
         return
 
-    time.sleep(DELAY_DEFAULT)
+    time.sleep(DELAY_DEFAULT)  # 0.3초 대기
 
-    # 2단계: 재료 클릭 및 빈 슬롯(empty_slot.png) 검증
-    sw_location = click_and_verify_upload(TARGET_IMAGE, SW_IMAGE, timeout=SEARCH_TIMEOUT)
+    # 2단계: 작물 클릭 -> 0.5초 대기 -> 색상 체크 -> 0.5초 대기 -> 연타 버튼 이동
+    sw_location = click_crop_and_verify_upload(TARGET_IMAGE, SW_IMAGE, timeout=SEARCH_TIMEOUT)
     if not sw_location or not running:
         return
 
-    # 3단계: 조리 연타 (sw2.png) 및 완료 감지 (f.png)
+    # 3단계: 조리 연타 및 완료 감지
     hold_until_image_detected(sw_location, f_template=_f_template, timeout=SEARCH_TIMEOUT, cps=SW_CLICK_CPS, f_confidence=F_IMAGE_CONFIDENCE, check_interval=F_IMAGE_CHECK_INTERVAL)
 
 def worker_loop():
