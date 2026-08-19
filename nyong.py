@@ -40,6 +40,7 @@ SW_IMAGE = 'sw2.png'                 # 조리 시작 버튼 이미지
 LOBBY_IMAGE = 'lobby.png'             # 로비 감지 이미지
 
 SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
+REGION = (0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
 
 # 💡 툴팁(설명창) 방지용 마우스 임시 피신 좌표 (화면 좌상단 빈 공간)
 SAFE_X, SAFE_Y = 100, 100
@@ -50,9 +51,9 @@ CONFIDENCE_TARGET = 0.80   # 작물 이미지 인식 정확도
 CONFIDENCE_BOWL = 0.80     # 그릇 이미지 인식 정확도
 CONFIDENCE_UI = 0.30       # UI 인식 정확도 (30%)
 
-# ⏱️ 딜레이 설정
+# ⏱️ 기본 딜레이 설정
 FAST_DELAY = 0.2
-CHECK_DELAY = 0.25         # 마우스 치운 후 검증 대기시간
+CHECK_DELAY = 0.35         # 우클릭 후 서버 갱신 대기시간 (0.35초)
 
 SEARCH_TIMEOUT = 10
 SEARCH_POLL_INTERVAL = 0.02
@@ -177,7 +178,7 @@ def image_watcher_thread(f_template, f_confidence, check_interval=0.05):
             return
         time.sleep(check_interval)
 
-# [1단계] UI 열기 검증
+# [1단계] UI 열기 검증 (기존 정상 작동 방식 유지)
 def open_gui_with_right_click(timeout=10):
     start = time.perf_counter()
     print('\n[진행] 조리대/싱크대 열기 시도')
@@ -225,7 +226,7 @@ def open_gui_with_right_click(timeout=10):
     print('[실패] UI 열기 타임아웃')
     return False
 
-# [2단계] 작물 우클릭 ➔ 💡 설명창 방지용 마우스 살짝 이동 ➔ 검증 ➔ 연타 이동
+# [2단계] 작물 우클릭 ➔ 💡 마우스 안전지대 피신 ➔ 0.35초 대기 ➔ 그릇 검증 ➔ 연타 버튼 이동
 def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, timeout=10):
     start = time.perf_counter()
     print('[진행] 재료 찾기 시도')
@@ -243,18 +244,18 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
             target_loc = None
             
         if target_loc:
-            print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 우클릭')
+            print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 우클릭 후 피신')
             
             # 1. 작물 우클릭
             pyautogui.click(target_loc.x, target_loc.y, button='right')
             
-            # 2. 💡 설명창(툴팁)이 생겨서 이미지를 가리지 않도록 마우스를 안전지대로 살짝 치움
+            # 2. 💡 우클릭 직후 툴팁 가림 방지를 위해 마우스를 안전지대(SAFE_X, SAFE_Y)로 즉시 이동
             move_mouse(SAFE_X, SAFE_Y)
             
-            # 3. 마우스 이탈 후 화면 갱신 대기
+            # 3. 우클릭 후 서버 반응 및 화면 갱신 대기
             time.sleep(CHECK_DELAY)
 
-            # 4. 그릇 사라짐 확인 (툴팁이 없어서 완벽히 감지 가능)
+            # 4. 그릇 사라짐 확인
             bowl_exists = False
             if os.path.exists(bowl_full_path):
                 try:
@@ -270,7 +271,7 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
                 try:
                     sw_loc = pyautogui.locateCenterOnScreen(sw_full_path, confidence=CONFIDENCE, grayscale=True)
                     if sw_loc:
-                        # 조리 버튼 위치로 마우스 커서 이동
+                        # 5. 조리 버튼 위치로 마우스 커서 이동
                         move_mouse(sw_loc.x, sw_loc.y)
                         time.sleep(FAST_DELAY)
                         return sw_loc
@@ -342,7 +343,7 @@ def do_cycle():
 
     time.sleep(FAST_DELAY)
 
-    # 2단계: 작물 우클릭 -> 툴팁 방지 마우스 이탈 -> 판독 -> 연타 이동
+    # 2단계: 작물 우클릭 -> 피신 -> 딜레이 후 그릇 검증 -> 연타 버튼 이동
     sw_location = click_crop_and_verify_upload(TARGET_IMAGE, BOWL_IMAGE, SW_IMAGE, timeout=SEARCH_TIMEOUT)
     if not sw_location or not running:
         return
@@ -388,7 +389,7 @@ def exit_program():
 def main():
     check_authorized_pc()
     print('========================================')
-    print('nyong.exe 매크로 실행됨 (툴팁 방지 마우스 피신 적용)')
+    print('nyong.exe 매크로 실행됨 (툴팁 방지 피신 적용)')
     print('F8: 시작 / 정지, F9: 종료')
     print('========================================\n')
     
