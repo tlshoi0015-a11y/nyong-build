@@ -21,7 +21,6 @@ try:
 except ImportError:
     USE_WIN32 = False
 
-# EXE 파일이 있는 폴더 경로 가져오기 (외부 이미지 로드용)
 def get_base_dir():
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
@@ -32,9 +31,9 @@ def check_authorized_pc():
     print('[인증 성공] 기기 제한 해제됨')
     return True
 
-# 이미지 파일명 정의 (.exe 파일과 같은 폴더에 위치해야 함)
+# 이미지 파일명 정의
 TARGET_IMAGE = 'target2.png'          # 재료 이미지
-BOWL_IMAGE = 'bowl.png'               # 도마 위 그릇 이미지 (작물이 올려지면 사라지는 이미지)
+BOWL_IMAGE = 'bowl.png'               # 도마 위 그릇 이미지
 SINK_IMAGE = 'sink.png'               # 싱크대 UI 이미지
 CUTTING_BOARD_IMAGE = 'cutting_board.png' # 도마 UI 이미지
 SW_IMAGE = 'sw2.png'                 # 조리 시작 버튼 이미지
@@ -44,24 +43,24 @@ SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
 REGION = (0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
 
 # [정밀도 설정]
-CONFIDENCE = 0.9           # 완료/버튼 기본 인식 정확도 (90% 유지)
-CONFIDENCE_TARGET = 0.80   # 작물 이미지 인식 정확도 (80% 적용)
+CONFIDENCE = 0.9           # 완료/버튼 기본 인식 정확도
+CONFIDENCE_TARGET = 0.80   # 작물 이미지 인식 정확도
 CONFIDENCE_BOWL = 0.80     # 그릇 이미지 인식 정확도
-CONFIDENCE_UI = 0.70       # UI 인식 정확도
+CONFIDENCE_UI = 0.55       # UI 인식 정확도 완화 (0.70 -> 0.55)
 
 # ⏱️ 모든 과정 딜레이 0.2초 적용
 FAST_DELAY = 0.2
 
 SEARCH_TIMEOUT = 10
 SEARCH_POLL_INTERVAL = 0.02
-LOOP_INTERVAL = 0.2        # 사이클 완료 후 대기시간 0.2초
+LOOP_INTERVAL = 0.2
 
 BASE_DIR = get_base_dir()
 F_IMAGE = os.path.join(BASE_DIR, 'f.png')
 F_IMAGE_CONFIDENCE = 0.5
 F_IMAGE_CHECK_INTERVAL = 0.05
 
-SW_CLICK_CPS = 60          # 초당 클릭수 60회
+SW_CLICK_CPS = 60
 TOGGLE_KEY = 'f8'
 EXIT_KEY = 'f9'
 FAST_CLICK_KEY = 'f6'
@@ -169,19 +168,26 @@ def image_watcher_thread(f_template, f_confidence, check_interval=0.05):
             return
         time.sleep(check_interval)
 
-# [1단계] 우클릭 후 조리대/싱크대 UI 열림 확인 (0.2초 대기)
+# [1단계] UI 열기 검증 (작물이 화면에 이미 감지되면 UI 검증 Pass)
 def open_gui_with_right_click(timeout=10):
     start = time.perf_counter()
-    print('\n[진행] 조리대/싱크대 열기 시도 (우클릭)')
+    print('\n[진행] 조리대/싱크대 열기 시도')
     sink_path = os.path.join(BASE_DIR, SINK_IMAGE)
     board_path = os.path.join(BASE_DIR, CUTTING_BOARD_IMAGE)
+    target_path = os.path.join(BASE_DIR, TARGET_IMAGE)
 
     while time.perf_counter() - start < timeout:
         if not running or check_lobby_and_stop():
             return False
-        
-        pyautogui.click(button='right')
-        time.sleep(FAST_DELAY)  # 0.2초 대기
+
+        # 이미 작물이 보이는 상태라면 UI가 열린 것으로 간주하여 즉시 통과
+        if os.path.exists(target_path):
+            try:
+                if pyautogui.locateCenterOnScreen(target_path, confidence=CONFIDENCE_TARGET, grayscale=True):
+                    print('[성공] 작물 감지됨 - UI 이미 열림 확인')
+                    return True
+            except pyautogui.ImageNotFoundException:
+                pass
 
         is_sink_open = False
         is_board_open = False
@@ -204,11 +210,10 @@ def open_gui_with_right_click(timeout=10):
             print('[성공] UI(도마 또는 싱크대) 열림 확인됨')
             return True
 
-        if not os.path.exists(sink_path) and not os.path.exists(board_path):
-            print('[안내] UI 이미지 파일 없음 - 검수 없이 진행')
-            return True
-        
-        print('[렉 감지] UI가 열리지 않음. 우클릭 재시도...')
+        # UI도 인식 안 되고 작물도 없으면 우클릭 실행
+        pyautogui.click(button='right')
+        time.sleep(FAST_DELAY)
+        print('[렉 감지] UI 감지 재시도 중...')
     
     print('[실패] UI 열기 타임아웃')
     return False
@@ -233,13 +238,13 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
         if target_loc:
             print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 제자리 우클릭')
             
-            # 1. 이동 치우기 없이 위치에서 즉시 우클릭
+            # 1. 제자리 우클릭
             pyautogui.click(target_loc.x, target_loc.y, button='right')
             
-            # 2. 우클릭 후 0.2초 대기
+            # 2. 0.2초 대기
             time.sleep(FAST_DELAY)
 
-            # 3. 그릇 이미지 감지 여부 확인 (작물이 등록되면 그릇 이미지가 사라짐)
+            # 3. 그릇 이미지 감지 확인
             bowl_exists = False
             if os.path.exists(bowl_full_path):
                 try:
@@ -254,7 +259,6 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
                 # 4. 연타 버튼 이동 전 0.2초 대기
                 time.sleep(FAST_DELAY)
                 
-                # 조리 시작 버튼 찾기
                 try:
                     sw_loc = pyautogui.locateCenterOnScreen(sw_full_path, confidence=CONFIDENCE, grayscale=True)
                     if sw_loc:
@@ -324,7 +328,7 @@ def do_cycle():
     if check_lobby_and_stop():
         return
 
-    # 1단계: UI 열림 검증 (0.2초 대기)
+    # 1단계: UI 열림 검증 (작물이 바로 인식되면 우클릭 생략하고 2단계 진입)
     if not open_gui_with_right_click(timeout=SEARCH_TIMEOUT):
         return
 
@@ -342,7 +346,7 @@ def worker_loop():
     while not stop_program:
         if running:
             do_cycle()
-            time.sleep(LOOP_INTERVAL)  # 사이클 간 대기 0.2초
+            time.sleep(LOOP_INTERVAL)
         else:
             time.sleep(0.05)
 
@@ -376,7 +380,7 @@ def exit_program():
 def main():
     check_authorized_pc()
     print('========================================')
-    print('nyong.exe 매크로 실행됨 (제자리 우클릭 적용)')
+    print('nyong.exe 매크로 실행됨 (UI 감지 로직 보완)')
     print('F8: 시작 / 정지, F9: 종료')
     print('========================================\n')
     
