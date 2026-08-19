@@ -42,14 +42,14 @@ LOBBY_IMAGE = 'lobby.png'             # 로비 감지 이미지
 SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
 REGION = (0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
 
-# 💡 툴팁(설명창) 방지용 마우스 임시 피신 좌표 (화면 좌상단 빈 공간)
-SAFE_X, SAFE_Y = 100, 100
+# 💡 툴팁(설명창) 방지용 마우스 임시 피신 좌표 (500, 500)
+SAFE_X, SAFE_Y = 500, 500
 
 # [정밀도 설정]
 CONFIDENCE = 0.9           # 완료/버튼 기본 인식 정확도
 CONFIDENCE_TARGET = 0.80   # 작물 이미지 인식 정확도
 CONFIDENCE_BOWL = 0.80     # 그릇 이미지 인식 정확도
-CONFIDENCE_UI = 0.70       # 💡 UI 인식 정확도 (0.7로 상향)
+CONFIDENCE_UI = 0.70       # UI 인식 정확도 (0.7)
 
 # ⏱️ 기본 딜레이 설정
 FAST_DELAY = 0.2
@@ -226,13 +226,15 @@ def open_gui_with_right_click(timeout=10):
     print('[실패] UI 열기 타임아웃')
     return False
 
-# [2단계] 작물 우클릭 ➔ 💡 마우스 안전지대 피신 ➔ 0.35초 대기 ➔ 그릇 검증 ➔ 연타 버튼 이동
+# [2단계] 제자리 깔끔한 우클릭 (5회 실패 시 안전지대 500, 500으로 대피)
 def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, timeout=10):
     start = time.perf_counter()
     print('[진행] 재료 찾기 시도')
     target_full_path = os.path.join(BASE_DIR, target_img_path)
     bowl_full_path = os.path.join(BASE_DIR, bowl_img_path)
     sw_full_path = os.path.join(BASE_DIR, sw_img_path)
+
+    fail_count = 0  # 실패 횟수 카운트
 
     while time.perf_counter() - start < timeout:
         if not running or check_lobby_and_stop():
@@ -244,18 +246,23 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
             target_loc = None
             
         if target_loc:
-            print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 우클릭 후 피신')
+            print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 우클릭 시도')
             
-            # 1. 작물 우클릭
-            pyautogui.click(target_loc.x, target_loc.y, button='right')
+            # 5번 이상 연속으로 실패했다면(툴팁 가림 의심) 마우스를 500, 500으로 대피시키고 시도
+            if fail_count >= 5:
+                print('[안내] 툴팁 가림 의심됨 - 마우스를 (500, 500)으로 대피 후 재시도')
+                move_mouse(SAFE_X, SAFE_Y)
+                time.sleep(0.05)
+            else:
+                move_mouse(target_loc.x, target_loc.y)
             
-            # 2. 툴팁 가림 방지를 위해 마우스를 안전지대(SAFE_X, SAFE_Y)로 즉시 이동
-            move_mouse(SAFE_X, SAFE_Y)
+            # 드래그 현상 없이 깔끔하게 우클릭 입력 전달
+            pyautogui.click(button='right')
             
-            # 3. 우클릭 후 서버 반응 및 화면 갱신 대기
+            # 충분한 서버 반응/화면 갱신 대기 시간 확보
             time.sleep(CHECK_DELAY)
 
-            # 4. 그릇 사라짐 확인
+            # 그릇 사라짐 확인
             bowl_exists = False
             if os.path.exists(bowl_full_path):
                 try:
@@ -271,7 +278,6 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
                 try:
                     sw_loc = pyautogui.locateCenterOnScreen(sw_full_path, confidence=CONFIDENCE, grayscale=True)
                     if sw_loc:
-                        # 5. 조리 버튼 위치로 마우스 커서 이동
                         move_mouse(sw_loc.x, sw_loc.y)
                         time.sleep(FAST_DELAY)
                         return sw_loc
@@ -280,7 +286,8 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
                 except pyautogui.ImageNotFoundException:
                     print('[경고] 조리 버튼(sw2.png) 이미지 검색 실패')
             else:
-                print('[경고/렉 감지] 그릇이 그대로 있음 (우클릭 씹힘). 재시도...')
+                fail_count += 1
+                print(f'[경고/렉 감지] 그릇이 그대로 있음 ({fail_count}/5회 실패). 재시도...')
                 time.sleep(FAST_DELAY)
                 continue
         
@@ -343,7 +350,7 @@ def do_cycle():
 
     time.sleep(FAST_DELAY)
 
-    # 2단계: 작물 우클릭 -> 피신 -> 딜레이 후 그릇 검증 -> 연타 버튼 이동
+    # 2단계: 작물 우클릭 -> 딜레이 후 그릇 검증 -> 연타 버튼 이동
     sw_location = click_crop_and_verify_upload(TARGET_IMAGE, BOWL_IMAGE, SW_IMAGE, timeout=SEARCH_TIMEOUT)
     if not sw_location or not running:
         return
@@ -389,7 +396,7 @@ def exit_program():
 def main():
     check_authorized_pc()
     print('========================================')
-    print('nyong.exe 매크로 실행됨 (UI 인식률 0.7 적용)')
+    print('nyong.exe 매크로 실행됨 (최종 완성 버전)')
     print('F8: 시작 / 정지, F9: 종료')
     print('========================================\n')
     
