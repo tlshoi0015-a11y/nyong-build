@@ -43,25 +43,23 @@ LOBBY_IMAGE = 'lobby.png'             # 로비 감지 이미지
 SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
 REGION = (0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
 
-# [정밀도 및 딜레이 설정]
+# [정밀도 설정]
 CONFIDENCE = 0.9           # 완료/버튼 기본 인식 정확도 (90% 유지)
 CONFIDENCE_TARGET = 0.80   # 작물 이미지 인식 정확도 (80% 적용)
 CONFIDENCE_BOWL = 0.80     # 그릇 이미지 인식 정확도
 CONFIDENCE_UI = 0.70       # UI 인식 정확도
 
-# ⏱️ 지정된 딜레이 설정
-DELAY_AFTER_RIGHT_CLICK = 0.5  # 1. 우클릭 후 그릇 상태 검사 전 대기 (0.5초)
-DELAY_BEFORE_SW_CLICK = 0.5    # 2. 그릇 사라짐 확인 후 연타 버튼으로 이동 전 대기 (0.5초)
-DELAY_DEFAULT = 0.3            # 3. 기타 동작 대기 (0.3초)
+# ⏱️ 모든 과정 딜레이 0.2초 적용
+FAST_DELAY = 0.2
 
 SEARCH_TIMEOUT = 10
 SEARCH_POLL_INTERVAL = 0.02
-LOOP_INTERVAL = 1.0        # 사이클 완료 후 대기시간 1.0초
+LOOP_INTERVAL = 0.2        # 사이클 완료 후 대기시간 0.2초
 
 BASE_DIR = get_base_dir()
 F_IMAGE = os.path.join(BASE_DIR, 'f.png')
 F_IMAGE_CONFIDENCE = 0.5
-F_IMAGE_CHECK_INTERVAL = 0.1
+F_IMAGE_CHECK_INTERVAL = 0.05
 
 SW_CLICK_CPS = 60          # 초당 클릭수 60회
 TOGGLE_KEY = 'f8'
@@ -163,7 +161,7 @@ def check_lobby_and_stop():
 
 _detection_flag = threading.Event()
 
-def image_watcher_thread(f_template, f_confidence, check_interval=0.1):
+def image_watcher_thread(f_template, f_confidence, check_interval=0.05):
     _detection_flag.clear()
     while running and (not stop_program) and (not _detection_flag.is_set()):
         if is_image_present_fullscreen_fast(f_template, confidence=f_confidence):
@@ -171,7 +169,7 @@ def image_watcher_thread(f_template, f_confidence, check_interval=0.1):
             return
         time.sleep(check_interval)
 
-# [1단계] 우클릭 후 조리대/싱크대 UI 열림 확인
+# [1단계] 우클릭 후 조리대/싱크대 UI 열림 확인 (0.2초 대기)
 def open_gui_with_right_click(timeout=10):
     start = time.perf_counter()
     print('\n[진행] 조리대/싱크대 열기 시도 (우클릭)')
@@ -183,7 +181,7 @@ def open_gui_with_right_click(timeout=10):
             return False
         
         pyautogui.click(button='right')
-        time.sleep(DELAY_DEFAULT)  # 0.3초 대기
+        time.sleep(FAST_DELAY)  # 0.2초 대기
 
         is_sink_open = False
         is_board_open = False
@@ -215,7 +213,7 @@ def open_gui_with_right_click(timeout=10):
     print('[실패] UI 열기 타임아웃')
     return False
 
-# [2단계] 작물 우클릭 ➔ 커서 치우기 ➔ 0.5초 대기 ➔ 그릇 이미지 사라짐 감지 ➔ 0.5초 대기
+# [2단계] 작물 우클릭 -> 0.05초 대기 후 이동 -> 0.2초 후 그릇 사라짐 검증 -> 0.2초 후 연타 버튼 이동
 def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, timeout=10):
     start = time.perf_counter()
     print('[진행] 재료 찾기 시도')
@@ -234,16 +232,18 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
             
         if target_loc:
             print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 우클릭 실행')
-            pyautogui.click(target_loc.x, target_loc.y, button='right')
             
-            # 커서 호버 효과가 그릇 이미지를 가리지 않도록 옆으로 치움
+            # 1. 클릭 확실히 전달
+            pyautogui.click(target_loc.x, target_loc.y, button='right')
+            time.sleep(0.05)
+            
+            # 2. 커서 살짝 이동
             pyautogui.moveTo(target_loc.x + 20, target_loc.y + 20)
             
-            # 우클릭 후 서버 반응 대기 (0.5초)
-            print(f'[대기 1] 우클릭 후 서버 반영 대기 ({DELAY_AFTER_RIGHT_CLICK}초)')
-            time.sleep(DELAY_AFTER_RIGHT_CLICK)
+            # 3. 우클릭 반응 대기 (0.2초)
+            time.sleep(FAST_DELAY)
 
-            # 그릇 이미지 감지 여부 확인 (작물이 들어가면 그릇 이미지가 화면에서 사라져야 함)
+            # 4. 그릇 이미지 감지 여부 확인
             bowl_exists = False
             if os.path.exists(bowl_full_path):
                 try:
@@ -255,9 +255,8 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
             if not bowl_exists:
                 print('[성공] 그릇 이미지 사라짐 확인! (재료 올라감)')
                 
-                # 연타 버튼 이동 전 대기 (0.5초)
-                print(f'[대기 2] 연타 버튼 이동 전 대기 ({DELAY_BEFORE_SW_CLICK}초)')
-                time.sleep(DELAY_BEFORE_SW_CLICK)
+                # 5. 이동 전 대기 (0.2초)
+                time.sleep(FAST_DELAY)
                 
                 # 조리 시작 버튼 찾기
                 try:
@@ -270,7 +269,7 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
                     print('[경고] 조리 버튼(sw2.png) 이미지 검색 실패')
             else:
                 print('[경고/렉 감지] 그릇이 그대로 있음 (우클릭 씹힘). 재시도...')
-                time.sleep(DELAY_DEFAULT)
+                time.sleep(FAST_DELAY)
                 continue
         
         time.sleep(SEARCH_POLL_INTERVAL)
@@ -278,7 +277,7 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
     print('[실패] 재료 올려두기 타임아웃')
     return None
 
-def hold_until_image_detected(sw_location, f_template, timeout=10, cps=60, f_confidence=0.8, check_interval=0.1):
+def hold_until_image_detected(sw_location, f_template, timeout=10, cps=60, f_confidence=0.8, check_interval=0.05):
     if not sw_location:
         return False
         
@@ -329,13 +328,13 @@ def do_cycle():
     if check_lobby_and_stop():
         return
 
-    # 1단계: UI 열림 검증
+    # 1단계: UI 열림 검증 (0.2초 대기)
     if not open_gui_with_right_click(timeout=SEARCH_TIMEOUT):
         return
 
-    time.sleep(DELAY_DEFAULT)
+    time.sleep(FAST_DELAY)
 
-    # 2단계: 작물 클릭 -> 마우스 이동 -> 0.5초 대기 -> 그릇 사라짐 검증 -> 0.5초 대기 -> 연타 버튼 이동
+    # 2단계: 작물 우클릭 -> 0.2초 후 그릇 사라짐 검증 -> 0.2초 후 연타 버튼 이동
     sw_location = click_crop_and_verify_upload(TARGET_IMAGE, BOWL_IMAGE, SW_IMAGE, timeout=SEARCH_TIMEOUT)
     if not sw_location or not running:
         return
@@ -347,10 +346,7 @@ def worker_loop():
     while not stop_program:
         if running:
             do_cycle()
-            for _ in range(int(LOOP_INTERVAL * 10)):
-                if not running or stop_program:
-                    break
-                time.sleep(0.1)
+            time.sleep(LOOP_INTERVAL)  # 사이클 간 대기 0.2초
         else:
             time.sleep(0.05)
 
@@ -384,7 +380,7 @@ def exit_program():
 def main():
     check_authorized_pc()
     print('========================================')
-    print('nyong.exe 매크로 실행됨')
+    print('nyong.exe 매크로 실행됨 (속도 최적화: 0.2s)')
     print('F8: 시작 / 정지, F9: 종료')
     print('========================================\n')
     
