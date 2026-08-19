@@ -47,7 +47,7 @@ CONFIDENCE = 0.9           # 완료/버튼 기본 인식 정확도 (90% 유지)
 CONFIDENCE_TARGET = 0.80   # 작물 이미지 인식 정확도 (80% 적용)
 CONFIDENCE_UI = 0.70       # UI 인식 정확도
 
-# ⏱️ 요청하신 딜레이 설정
+# ⏱️ 지정된 딜레이 설정
 DELAY_AFTER_RIGHT_CLICK = 0.5  # 1. 재료 누르고 색상 변화 체크 전 대기 (0.5초)
 DELAY_BEFORE_SW_CLICK = 0.5    # 2. 검증 후 연타 버튼으로 이동 전 대기 (0.5초)
 DELAY_DEFAULT = 0.3            # 3. 기타 동작 대기 (0.3초)
@@ -213,7 +213,7 @@ def open_gui_with_right_click(timeout=10):
     print('[실패] UI 열기 타임아웃')
     return False
 
-# [2단계] 작물 클릭 ➔ 0.5초 후 색상 변경 체크 ➔ 0.5초 후 연타 버튼으로 이동
+# [2단계] 작물 우클릭 ➔ 커서 이탈 ➔ 0.5초 후 색상 체크 ➔ 0.5초 후 연타 버튼 이동
 def click_crop_and_verify_upload(target_img_path, sw_img_path, timeout=10):
     start = time.perf_counter()
     print('[진행] 재료 찾기 시도')
@@ -236,11 +236,14 @@ def click_crop_and_verify_upload(target_img_path, sw_img_path, timeout=10):
             print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 우클릭 실행')
             pyautogui.click(target_loc.x, target_loc.y, button='right')
             
+            # 💡 호버 하이라이트 간섭 방지를 위해 마우스를 옆으로 15px 살짝 비킴
+            pyautogui.moveTo(target_loc.x + 15, target_loc.y + 15)
+            
             # 2. 우클릭 후 0.5초 대기
-            print(f'[대기] 색상 변경 검증 전 {DELAY_AFTER_RIGHT_CLICK}초 대기...')
+            print(f'[대기 1] 우클릭 후 서버 반영 대기 ({DELAY_AFTER_RIGHT_CLICK}초)')
             time.sleep(DELAY_AFTER_RIGHT_CLICK)
 
-            # 3. 우클릭 후 색상 감지 및 비교
+            # 3. 커서를 치운 상태에서 색상 검증
             after_color = pyautogui.pixel(int(target_loc.x), int(target_loc.y))
 
             color_changed = False
@@ -250,8 +253,10 @@ def click_crop_and_verify_upload(target_img_path, sw_img_path, timeout=10):
                 color_changed = True
 
             if color_changed:
-                print('[성공] 재료 등록 완료! (색상 변경 감지됨)')
-                print(f'[대기] 연타 버튼으로 이동 전 {DELAY_BEFORE_SW_CLICK}초 대기...')
+                print('[성공] 재료 등록 완료! (슬롯 비워짐 판정)')
+                
+                # 4. 연타 버튼 이동 전 0.5초 대기
+                print(f'[대기 2] 연타 버튼 이동 전 대기 ({DELAY_BEFORE_SW_CLICK}초)')
                 time.sleep(DELAY_BEFORE_SW_CLICK)
                 
                 # 조리 버튼 좌표 찾기
@@ -264,7 +269,7 @@ def click_crop_and_verify_upload(target_img_path, sw_img_path, timeout=10):
                 except pyautogui.ImageNotFoundException:
                     print('[경고] 조리 버튼(sw2.png) 이미지 검색 실패')
             else:
-                print('[경고/렉 감지] 우클릭이 씹혀 재료가 남아있음! 재시도...')
+                print('[경고/렉 감지] 우클릭이 씹혀 슬롯 변화 없음! 우클릭 재시도...')
                 time.sleep(DELAY_DEFAULT)
                 continue
         
@@ -324,13 +329,13 @@ def do_cycle():
     if check_lobby_and_stop():
         return
 
-    # 1단계: UI 열림 검증
+    # 1단계: UI 열림 검증 (0.3초 딜레이 포함)
     if not open_gui_with_right_click(timeout=SEARCH_TIMEOUT):
         return
 
-    time.sleep(DELAY_DEFAULT)  # 0.3초 대기
+    time.sleep(DELAY_DEFAULT)
 
-    # 2단계: 작물 클릭 -> 0.5초 대기 -> 색상 체크 -> 0.5초 대기 -> 연타 버튼 이동
+    # 2단계: 작물 클릭 -> 마우스 이동 -> 0.5초 대기 -> 색상 체크 -> 0.5초 대기 -> 연타 버튼 좌표
     sw_location = click_crop_and_verify_upload(TARGET_IMAGE, SW_IMAGE, timeout=SEARCH_TIMEOUT)
     if not sw_location or not running:
         return
