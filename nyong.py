@@ -42,7 +42,7 @@ LOBBY_IMAGE = 'lobby.png'             # 로비 감지 이미지
 SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
 REGION = (0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
 
-# 💡 마우스 임시 피신 좌표 (500, 500)
+# 💡 마우스 임시 피신 좌표 (500, 500) - 툴팁 가림 방지용
 SAFE_X, SAFE_Y = 500, 500
 
 # [정밀도 설정]
@@ -178,7 +178,7 @@ def image_watcher_thread(f_template, f_confidence, check_interval=0.05):
             return
         time.sleep(check_interval)
 
-# [1단계] 반드시 도마 또는 싱크대 UI가 열려야만 통과 (작물 감지로 껑충 뛰는 오류 해결)
+# [1단계] 반드시 도마 또는 싱크대 UI가 열려야만 통과
 def open_gui_with_right_click(timeout=10):
     global running
     start = time.perf_counter()
@@ -207,12 +207,10 @@ def open_gui_with_right_click(timeout=10):
             except pyautogui.ImageNotFoundException:
                 pass
 
-        # 도마나 싱크대 UI가 확실히 화면에 감지된 경우에만 통과
         if is_sink_open or is_board_open:
             print('[성공] 도마 또는 싱크대 UI 열림 확인됨')
             return True
 
-        # UI가 아직 안 열렸다면 우클릭으로 열기 시도
         pyautogui.click(button='right')
         time.sleep(FAST_DELAY)
         print('[렉 감지] UI 감지 재시도 중...')
@@ -221,15 +219,13 @@ def open_gui_with_right_click(timeout=10):
     running = False
     return False
 
-# [2단계] 제자리 깔끔한 우클릭 (5회 실패 시 안전지대 500, 500으로 대피)
+# [2단계] 작물 우클릭 후 툴팁 가림 방지를 위해 마우스를 즉시 안전지대(500, 500)로 빼기
 def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, timeout=10):
     start = time.perf_counter()
     print('[진행] 재료 찾기 시도')
     target_full_path = os.path.join(BASE_DIR, target_img_path)
     bowl_full_path = os.path.join(BASE_DIR, bowl_img_path)
     sw_full_path = os.path.join(BASE_DIR, sw_img_path)
-
-    fail_count = 0  # 실패 횟수 카운트
 
     while time.perf_counter() - start < timeout:
         if not running or check_lobby_and_stop():
@@ -242,19 +238,13 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
             
         if target_loc:
             print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 우클릭 시도')
-            
-            # 5번 이상 연속으로 실패했다면(툴팁 가림 의심) 마우스를 500, 500으로 대피시키고 시도
-            if fail_count >= 5:
-                print('[안내] 툴팁 가림 의심됨 - 마우스를 (500, 500)으로 대피 후 재시도')
-                move_mouse(SAFE_X, SAFE_Y)
-                time.sleep(0.05)
-            else:
-                move_mouse(target_loc.x, target_loc.y)
-            
-            # 드래그 현상 없이 깔끔하게 우클릭 입력 전달
+            move_mouse(target_loc.x, target_loc.y)
             pyautogui.click(button='right')
             
-            # 충분한 서버 반응/화면 갱신 대기 시간 확보
+            # 💡 핵심 수정: 우클릭 직후 마우스를 즉시 안전지대(500, 500)로 이동시켜 설명 툴팁 제거
+            move_mouse(SAFE_X, SAFE_Y)
+            
+            # 서버 반응 및 화면 갱신 대기
             time.sleep(CHECK_DELAY)
 
             # 그릇 사라짐 확인
@@ -281,8 +271,7 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
                 except pyautogui.ImageNotFoundException:
                     print('[경고] 조리 버튼(sw2.png) 이미지 검색 실패')
             else:
-                fail_count += 1
-                print(f'[경고/렉 감지] 그릇이 그대로 있음 ({fail_count}/5회 실패). 재시도...')
+                print('[경고/렉 감지] 그릇이 그대로 있음. 재시도...')
                 time.sleep(FAST_DELAY)
                 continue
         
@@ -345,7 +334,7 @@ def do_cycle():
 
     time.sleep(FAST_DELAY)
 
-    # 2단계: 작물 우클릭 -> 딜레이 후 그릇 검증 -> 연타 버튼 이동
+    # 2단계: 작물 우클릭 -> 툴팁 피신 -> 그릇 검증 -> 연타 버튼 이동
     sw_location = click_crop_and_verify_upload(TARGET_IMAGE, BOWL_IMAGE, SW_IMAGE, timeout=SEARCH_TIMEOUT)
     if not sw_location or not running:
         return
@@ -391,7 +380,7 @@ def exit_program():
 def main():
     check_authorized_pc()
     print('========================================')
-    print('nyong.exe 매크로 실행됨 (UI 검증 강화 버전)')
+    print('nyong.exe 매크로 실행됨 (툴팁 방지 버전)')
     print('F8: 시작 / 정지, F9: 종료')
     print('========================================\n')
     
