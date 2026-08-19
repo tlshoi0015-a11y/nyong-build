@@ -49,7 +49,7 @@ SAFE_X, SAFE_Y = 100, 100
 CONFIDENCE = 0.9           # 완료/버튼 기본 인식 정확도
 CONFIDENCE_TARGET = 0.80   # 작물 이미지 인식 정확도
 CONFIDENCE_BOWL = 0.80     # 그릇 이미지 인식 정확도
-CONFIDENCE_UI = 0.30       # UI 인식 정확도 (30%)
+CONFIDENCE_UI = 0.70       # 💡 UI 인식 정확도 (0.7로 상향)
 
 # ⏱️ 기본 딜레이 설정
 FAST_DELAY = 0.2
@@ -178,7 +178,7 @@ def image_watcher_thread(f_template, f_confidence, check_interval=0.05):
             return
         time.sleep(check_interval)
 
-# [1단계] UI 열기 검증 (기존 정상 작동 방식 유지)
+# [1단계] UI 열기 검증 (CONFIDENCE_UI = 0.7)
 def open_gui_with_right_click(timeout=10):
     start = time.perf_counter()
     print('\n[진행] 조리대/싱크대 열기 시도')
@@ -249,7 +249,7 @@ def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, ti
             # 1. 작물 우클릭
             pyautogui.click(target_loc.x, target_loc.y, button='right')
             
-            # 2. 💡 우클릭 직후 툴팁 가림 방지를 위해 마우스를 안전지대(SAFE_X, SAFE_Y)로 즉시 이동
+            # 2. 툴팁 가림 방지를 위해 마우스를 안전지대(SAFE_X, SAFE_Y)로 즉시 이동
             move_mouse(SAFE_X, SAFE_Y)
             
             # 3. 우클릭 후 서버 반응 및 화면 갱신 대기
@@ -389,7 +389,7 @@ def exit_program():
 def main():
     check_authorized_pc()
     print('========================================')
-    print('nyong.exe 매크로 실행됨 (툴팁 방지 피신 적용)')
+    print('nyong.exe 매크로 실행됨 (UI 인식률 0.7 적용)')
     print('F8: 시작 / 정지, F9: 종료')
     print('========================================\n')
     
