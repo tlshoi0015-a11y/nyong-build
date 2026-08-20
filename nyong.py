@@ -1,421 +1,263 @@
-# nyong.py - Minecraft Auto Cooking Macro
-global fast_clicking
-global running
-global stop_program
-
+import os
 import time
 import threading
-import ctypes
-import pyautogui
-import keyboard
+import random
+import cv2
 import numpy as np
 import mss
-import cv2
-import os
-import sys
+import keyboard
+import win32api
+import win32con
 
-try:
-    import win32api
-    import win32con
-    USE_WIN32 = True
-except ImportError:
-    USE_WIN32 = False
+# ==================== 설정 및 전역 변수 ====================
+is_running = False
+is_terminated = False
 
-def get_base_dir():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
+# 인식 정확도 설정 (초기값 80%)
+threshold_item = 0.80   # 1번: 작물 본체 (target2.png)
+threshold_desc = 0.80   # 2번: 작물 설명탭 (t2.png)
+threshold_finish = 0.80 # 완성 멘트 (f.png)
 
-def check_authorized_pc():
-    print('[인증 성공] 기기 제한 해제됨')
-    return True
+# 연타 속도 (CPS) 설정 (최소 10, 최대 100, 초기값 65)
+current_cps = 65
 
-# 이미지 파일명 정의
-TARGET_IMAGE = 'target2.png'          # 재료 이미지
-BOWL_IMAGE = 'bowl.png'               # 도마 위 그릇 이미지
-SINK_IMAGE = 'sink.png'               # 싱크대 UI 이미지
-CUTTING_BOARD_IMAGE = 'cutting_board.png' # 도마 UI 이미지
-SW_IMAGE = 'sw2.png'                 # 조리 시작 버튼 이미지
-LOBBY_IMAGE = 'lobby.png'             # 로비 감지 이미지
+# 필수 이미지 파일 목록
+REQUIRED_IMAGES = [
+    'target2.png', 't2.png', 'bowl.png', 'sw2.png', 
+    'f.png', 'sink.png', 'cutting_board.png', 'lobby.png'
+]
 
-SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
-REGION = (0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
+# ==================== 이미지 및 화면 함수 ====================
+def check_images():
+    missing = [img for img in REQUIRED_IMAGES if not os.path.exists(img)]
+    if missing:
+        print(f"[경고] 다음 이미지 파일이 누락되었습니다: {missing}")
+        print("스크립트 실행 전 동일 폴더에 이미지들을 준비해주세요.")
 
-# [정밀도 설정]
-CONFIDENCE = 0.9           # 완료/버튼 기본 인식 정확도
-CONFIDENCE_TARGET = 0.80   # 작물 이미지 인식 정확도
-CONFIDENCE_BOWL = 0.80     # 그릇 이미지 인식 정확도
-CONFIDENCE_UI = 0.70       # UI 인식 정확도 (0.7)
+def capture_screen():
+    with mss.mss() as sct:
+        monitor = sct.monitors[1]
+        screenshot = sct.grab(monitor)
+        img = np.array(screenshot)
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
-# ⏱️ 기본 딜레이 설정
-FAST_DELAY = 0.2
-CHECK_DELAY = 0.4          # 우클릭 후 서버 갱신 대기시간
-
-SEARCH_TIMEOUT = 10
-SEARCH_POLL_INTERVAL = 0.02
-LOOP_INTERVAL = 0.2
-
-BASE_DIR = get_base_dir()
-F_IMAGE = os.path.join(BASE_DIR, 'f.png')
-F_IMAGE_CONFIDENCE = 0.5
-F_IMAGE_CHECK_INTERVAL = 0.05
-
-SW_CLICK_CPS = 60
-TOGGLE_KEY = 'f8'
-EXIT_KEY = 'f9'
-FAST_CLICK_KEY = 'f6'
-CLICKS_PER_SECOND = 20
-
-pyautogui.PAUSE = 0
-pyautogui.FAILSAFE = False
-
-running = False
-fast_clicking = False
-stop_program = False
-
-try:
-    ctypes.windll.winmm.timeBeginPeriod(1)
-except Exception:
-    pass
-
-_thread_local = threading.local()
-
-def get_sct():
-    if not hasattr(_thread_local, 'sct'):
-        _thread_local.sct = mss.mss()
-    return _thread_local.sct
-
-def imread_unicode(path, flags=cv2.IMREAD_GRAYSCALE):
-    try:
-        img_array = np.fromfile(path, dtype=np.uint8)
-        img = cv2.imdecode(img_array, flags)
-        return img
-    except Exception as e:
-        print(f'[에러] 이미지 읽기 실패: {e}')
+def find_image(template_name, threshold=0.8):
+    if not os.path.exists(template_name):
+        return None
+    
+    screen = capture_screen()
+    template = cv2.imread(template_name, cv2.IMREAD_COLOR)
+    if template is None:
         return None
 
-_f_template = imread_unicode(F_IMAGE, cv2.IMREAD_GRAYSCALE)
+    result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
-PUL = ctypes.POINTER(ctypes.c_ulong)
-
-class MouseInput(ctypes.Structure):
-    _fields_ = [('dx', ctypes.c_long), ('dy', ctypes.c_long), ('mouseData', ctypes.c_ulong), ('dwFlags', ctypes.c_ulong), ('time', ctypes.c_ulong), ('dwExtraInfo', PUL)]
-
-class Input_I(ctypes.Union):
-    _fields_ = [('mi', MouseInput)]
-
-class Input(ctypes.Structure):
-    _fields_ = [('type', ctypes.c_ulong), ('ii', Input_I)]
-
-# 우클릭 이벤트 플래그 정의
-MOUSEEVENTF_RIGHTDOWN = 0x0008
-MOUSEEVENTF_RIGHTUP = 0x0010
-INPUT_MOUSE = 0
-
-def send_input_right_click_human():
-    """실제 사람이 마우스를 '딸깍' 누르는 속도(약 0.1초)로 우클릭을 수행하는 함수"""
-    extra = ctypes.c_ulong(0)
-    
-    # 우클릭 누름
-    ii_down = Input_I()
-    ii_down.mi = MouseInput(0, 0, 0, MOUSEEVENTF_RIGHTDOWN, 0, ctypes.pointer(extra))
-    x_down = Input(INPUT_MOUSE, ii_down)
-    ctypes.windll.user32.SendInput(1, ctypes.pointer(x_down), ctypes.sizeof(x_down))
-    
-    # 사람이 누르는 자연스러운 속도 간격 (0.1초)
-    time.sleep(0.1)
-    
-    # 우클릭 뗌
-    ii_up = Input_I()
-    ii_up.mi = MouseInput(0, 0, 0, MOUSEEVENTF_RIGHTUP, 0, ctypes.pointer(extra))
-    x_up = Input(INPUT_MOUSE, ii_up)
-    ctypes.windll.user32.SendInput(1, ctypes.pointer(x_up), ctypes.sizeof(x_up))
-
-def send_input_click():
-    extra = ctypes.c_ulong(0)
-    ii_down = Input_I()
-    ii_down.mi = MouseInput(0, 0, 0, 2, 0, ctypes.pointer(extra)) # LEFTDOWN
-    x_down = Input(INPUT_MOUSE, ii_down)
-    ctypes.windll.user32.SendInput(1, ctypes.pointer(x_down), ctypes.sizeof(x_down))
-    ii_up = Input_I()
-    ii_up.mi = MouseInput(0, 0, 0, 4, 0, ctypes.pointer(extra)) # LEFTUP
-    x_up = Input(INPUT_MOUSE, ii_up)
-    ctypes.windll.user32.SendInput(1, ctypes.pointer(x_up), ctypes.sizeof(x_up))
-
-def fast_mouse_click(x, y):
-    if USE_WIN32:
-        win32api.SetCursorPos((int(x), int(y)))
-        send_input_click()
-    else:
-        pyautogui.click(x, y)
-
-def move_mouse(x, y):
-    if USE_WIN32:
-        win32api.SetCursorPos((int(x), int(y)))
-    else:
-        pyautogui.moveTo(x, y)
-
-def is_image_present_fullscreen_fast(template, confidence=0.8):
-    if template is None:
-        return False
-    try:
-        sct = get_sct()
-        monitor = sct.monitors[0]
-        screenshot = sct.grab(monitor)
-        img_arr = np.array(screenshot)
-        screen_gray = cv2.cvtColor(img_arr, cv2.COLOR_BGRA2GRAY)
-        result = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, _ = cv2.minMaxLoc(result)
-        return max_val >= confidence
-    except Exception as e:
-        return False
-
-def check_lobby_and_stop():
-    global running
-    lobby_path = os.path.join(BASE_DIR, LOBBY_IMAGE)
-    if os.path.exists(lobby_path):
-        try:
-            loc = pyautogui.locateCenterOnScreen(lobby_path, confidence=0.8, grayscale=True)
-            if loc:
-                print('\n[경고] 로비 화면 감지됨! 매크로 정지.')
-                running = False
-                return True
-        except pyautogui.ImageNotFoundException:
-            pass
-    return False
-
-_detection_flag = threading.Event()
-
-def image_watcher_thread(f_template, f_confidence, check_interval=0.05):
-    _detection_flag.clear()
-    while running and (not stop_program) and (not _detection_flag.is_set()):
-        if is_image_present_fullscreen_fast(f_template, confidence=f_confidence):
-            _detection_flag.set()
-            return
-        time.sleep(check_interval)
-
-# [1단계] 도마/싱크대 UI 열림 필수 검증
-def open_gui_with_right_click(timeout=10):
-    global running
-    start = time.perf_counter()
-    print('\n[진행] 조리대/싱크대 열기 시도')
-    sink_path = os.path.join(BASE_DIR, SINK_IMAGE)
-    board_path = os.path.join(BASE_DIR, CUTTING_BOARD_IMAGE)
-
-    while time.perf_counter() - start < timeout:
-        if not running or check_lobby_and_stop():
-            return False
-
-        is_sink_open = False
-        is_board_open = False
-
-        if os.path.exists(sink_path):
-            try:
-                if pyautogui.locateCenterOnScreen(sink_path, confidence=CONFIDENCE_UI, grayscale=True):
-                    is_sink_open = True
-            except pyautogui.ImageNotFoundException:
-                pass
-
-        if os.path.exists(board_path):
-            try:
-                if pyautogui.locateCenterOnScreen(board_path, confidence=CONFIDENCE_UI, grayscale=True):
-                    is_board_open = True
-            except pyautogui.ImageNotFoundException:
-                pass
-
-        if is_sink_open or is_board_open:
-            print('[성공] 도마 또는 싱크대 UI 열림 확인됨')
-            return True
-
-        if USE_WIN32:
-            win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
-            time.sleep(0.1)
-            win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
-        else:
-            pyautogui.click(button='right')
-            
-        time.sleep(FAST_DELAY)
-        print('[렉 감지] UI 감지 재시도 중...')
-    
-    print('[실패] 도마/싱크대 UI 열기 타임아웃 - 매크로를 중지합니다.')
-    running = False
-    return False
-
-# [2단계] 작물 사람 속도 '딸깍' 우클릭 및 업로드 검증
-def click_crop_and_verify_upload(target_img_path, bowl_img_path, sw_img_path, timeout=10):
-    start = time.perf_counter()
-    print('[진행] 재료 찾기 시도')
-    target_full_path = os.path.join(BASE_DIR, target_img_path)
-    bowl_full_path = os.path.join(BASE_DIR, bowl_img_path)
-    sw_full_path = os.path.join(BASE_DIR, sw_img_path)
-
-    while time.perf_counter() - start < timeout:
-        if not running or check_lobby_and_stop():
-            return None
-        
-        try:
-            target_loc = pyautogui.locateCenterOnScreen(target_full_path, confidence=CONFIDENCE_TARGET, grayscale=True)
-        except pyautogui.ImageNotFoundException:
-            target_loc = None
-            
-        if target_loc:
-            print(f'[동작] 작물 발견({target_loc.x}, {target_loc.y}) -> 사람 속도 우클릭 딸깍 시도')
-            move_mouse(target_loc.x, target_loc.y)
-            
-            if USE_WIN32:
-                send_input_right_click_human()
-            else:
-                pyautogui.click(button='right')
-                
-            time.sleep(CHECK_DELAY)
-
-            # 그릇 사라짐 확인
-            bowl_exists = False
-            if os.path.exists(bowl_full_path):
-                try:
-                    if pyautogui.locateCenterOnScreen(bowl_full_path, confidence=CONFIDENCE_BOWL, grayscale=True):
-                        bowl_exists = True
-                except pyautogui.ImageNotFoundException:
-                    bowl_exists = False
-
-            if not bowl_exists:
-                print('[성공] 그릇 이미지 사라짐 확인! (재료 올라감)')
-                
-                # 조리 시작 버튼 위치 찾기
-                try:
-                    sw_loc = pyautogui.locateCenterOnScreen(sw_full_path, confidence=CONFIDENCE, grayscale=True)
-                    if sw_loc:
-                        move_mouse(sw_loc.x, sw_loc.y)
-                        time.sleep(FAST_DELAY)
-                        return sw_loc
-                    else:
-                        print('[경고] 조리 버튼(sw2.png)을 찾을 수 없음')
-                except pyautogui.ImageNotFoundException:
-                    print('[경고] 조리 버튼(sw2.png) 이미지 검색 실패')
-            else:
-                print('[경고/렉 감지] 그릇이 그대로 있음. 재시도...')
-                time.sleep(FAST_DELAY)
-                continue
-        
-        time.sleep(SEARCH_POLL_INTERVAL)
-        
-    print('[실패] 재료 올려두기 타임아웃')
+    if max_val >= threshold:
+        h, w, _ = template.shape
+        center_x = max_loc[0] + w // 2
+        center_y = max_loc[1] + h // 2
+        return (center_x, center_y)
     return None
 
-def hold_until_image_detected(sw_location, f_template, timeout=10, cps=60, f_confidence=0.8, check_interval=0.05):
-    if not sw_location:
+def check_image_exists(template_name, threshold=0.8):
+    if not os.path.exists(template_name):
         return False
+    screen = capture_screen()
+    template = cv2.imread(template_name, cv2.IMREAD_COLOR)
+    if template is None:
+        return False
+    result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, _ = cv2.minMaxLoc(result)
+    return max_val >= threshold
+
+# ==================== 마우스 조작 함수 ====================
+def human_right_click():
+    """ 0.1초 ~ 0.2초 사이의 랜덤한 유지 시간을 가진 우클릭 """
+    win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+    sleep_time = random.uniform(0.1, 0.2)
+    time.sleep(sleep_time)
+    win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+
+# ==================== 실시간 조절 단축키 기능 ====================
+def adjust_threshold_menu():
+    global threshold_item, threshold_desc
+    print("\n" + "="*40)
+    print(" [정확도 설정 메뉴]")
+    print(f" 1. 작물 본체 (target2.png) 현재 정확도: {int(threshold_item * 100)}%")
+    print(f" 2. 작물 설명탭 (t2.png) 현재 정확도: {int(threshold_desc * 100)}%")
+    print("="*40)
+    
+    choice = input("조절할 항목의 번호를 입력하세요 (1 또는 2, 취소는 다른 아무 키나 엔터): ").strip()
+    
+    if choice in ['1', '2']:
+        target_name = "작물 본체" if choice == '1' else "작물 설명탭"
+        print(f"\n[{target_name}] 조절 모드 활성화됨")
+        print(" -> [Page Up]: 5% 올리기 (+)")
+        print(" -> [Page Down]: 5% 내리기 (-)")
+        print(" -> [그 외 아무 키나 엔터]: 설정 종료")
         
-    click_interval = 1.0 / cps
-    print(f'[진행] 연타 시작 (CPS: {cps})')
-    
-    watcher = threading.Thread(target=image_watcher_thread, args=(f_template, f_confidence, check_interval), daemon=True)
-    watcher.start()
-    
-    click_count = 0
-    measure_start = time.perf_counter()
-    next_click_time = time.perf_counter()
-    
-    while running and (not stop_program):
-        if check_lobby_and_stop():
-            return False
+        while True:
+            event = keyboard.read_event(suppress=True)
+            if event.event_type == keyboard.KEY_DOWN:
+                if event.name == 'page up':
+                    if choice == '1':
+                        threshold_item = min(1.0, threshold_item + 0.05)
+                        print(f" -> 작물 본체 정확도: {int(threshold_item * 100)}%")
+                    else:
+                        threshold_desc = min(1.0, threshold_desc + 0.05)
+                        print(f" -> 작물 설명탭 정확도: {int(threshold_desc * 100)}%")
+                elif event.name == 'page down':
+                    if choice == '1':
+                        threshold_item = max(0.1, threshold_item - 0.05)
+                        print(f" -> 작물 본체 정확도: {int(threshold_item * 100)}%")
+                    else:
+                        threshold_desc = max(0.1, threshold_desc - 0.05)
+                        print(f" -> 작물 설명탭 정확도: {int(threshold_desc * 100)}%")
+                else:
+                    print("[설정 완료] 메뉴를 나갑니다.\n")
+                    break
+    else:
+        print("[취소] 설정 메뉴를 종료합니다.\n")
+
+def decrease_cps():
+    global current_cps
+    current_cps = max(10, current_cps - 1)
+    print(f"[속도 조절] 연타 CPS 낮춤: {current_cps} CPS")
+
+def increase_cps():
+    global current_cps
+    current_cps = min(100, current_cps + 1)
+    print(f"[속도 조절] 연타 CPS 높임: {current_cps} CPS")
+
+# ==================== 메인 매크로 루프 ====================
+def macro_loop():
+    global is_running, threshold_item, threshold_desc, threshold_finish, current_cps
+    print("[안내] 매크로 대기 중...")
+    print("[단축키 안내]")
+    print(" - F8: 시작 / 정지")
+    print(" - F9: 완전 종료")
+    print(" - F5: 정확도 조절 메뉴 (터미널 제어)")
+    print(f" - F6 / F7: 연타 속도 1씩 낮추기 / 높이기 (현재: {current_cps} CPS / 범위: 10 ~ 100)\n")
+
+    while not is_terminated:
+        if not is_running:
+            time.sleep(0.1)
+            continue
+
+        print("[진행] 재료 탐색 시작...")
+        start_time = time.time()
+        target_pos = None
+
+        # 5초 타임아웃 루프 (재료 탐색)
+        while is_running and not is_terminated:
+            # 1순위: 작물 본체 이미지
+            target_pos = find_image('target2.png', threshold=threshold_item)
+            if target_pos:
+                break
             
-        if _detection_flag.is_set():
-            print(f'[감지 완료] 화면에 {F_IMAGE} 감지됨')
-            return True
+            # 2순위: 설명탭 이미지
+            target_pos = find_image('t2.png', threshold=threshold_desc)
+            if target_pos:
+                break
+
+            # 5초 초과 시 재료 소진으로 판단 후 중지
+            if time.time() - start_time > 5.0:
+                print("[알림] 5초 동안 재료나 설명탭을 찾지 못해 매크로를 중지합니다. (재료 소진)")
+                is_running = False
+                break
             
-        now = time.perf_counter()
-        if now >= next_click_time:
-            if USE_WIN32:
-                send_input_click()
-            else:
-                pyautogui.click(sw_location.x, sw_location.y)
-            click_count += 1
-            next_click_time += click_interval
-            if next_click_time < now - click_interval:
-                next_click_time = now + click_interval
-                
-        if now - measure_start >= 1.0:
-            actual_cps = click_count / (now - measure_start)
-            print(f'[측정] 실제 CPS: {actual_cps:.1f}')
-            click_count = 0
-            measure_start = now
-            
-        time.sleep(0.0005)
+            time.sleep(0.1)
+
+        if not is_running or target_pos is None:
+            continue
+
+        # 제자리 우클릭 수행 (랜덤 타이밍 반영)
+        win32api.SetCursorPos(target_pos)
+        time.sleep(0.05)
+        human_right_click()
+        print("[동작] 우클릭 완료 (랜덤 0.1~0.2초). 0.5초 대기 및 그릇 소멸 검증 중...")
+        time.sleep(0.5)
+
+        # 그릇 소멸 검증 (bowl.png가 사라져야 정상 안착)
+        bowl_check_start = time.time()
+        while check_image_exists('bowl.png'):
+            if not is_running or is_terminated:
+                break
+            if time.time() - bowl_check_start > 2.0:
+                print("[경고] 그릇이 사라지지 않았습니다. 재시도합니다.")
+                break
+            time.sleep(0.1)
         
-    _detection_flag.set()
-    return False
+        if not is_running:
+            continue
 
-def do_cycle():
-    if check_lobby_and_stop():
-        return
+        print("[진행] 재료 안착 확인. 조리 버튼 연타 시작...")
 
-    # 1단계: 도마/싱크대 UI 열림 필수 검증
-    if not open_gui_with_right_click(timeout=SEARCH_TIMEOUT):
-        return
+        # 조리 버튼 연타 및 UI 이탈(튕김) 감지 루프
+        while is_running and not is_terminated:
+            # 완료 이미지(f.png) 검증
+            if check_image_exists('f.png', threshold=threshold_finish):
+                print("[완료] 조리 완료 이미지 감지! 다음 루프 파트로 넘어갑니다.")
+                time.sleep(0.2)
+                break
 
-    time.sleep(FAST_DELAY)
+            # 튕김 방어: 도마/싱크대 UI가 사라졌거나 로비 화면이 감지되면 즉시 정지
+            ui_exists = check_image_exists('cutting_board.png') or check_image_exists('sink.png')
+            lobby_exists = check_image_exists('lobby.png')
 
-    # 2단계: 작물 사람 속도 '딸깍' 우클릭 -> 그릇 검증 -> 연타 버튼 이동
-    sw_location = click_crop_and_verify_upload(TARGET_IMAGE, BOWL_IMAGE, SW_IMAGE, timeout=SEARCH_TIMEOUT)
-    if not sw_location or not running:
-        return
+            if not ui_exists or lobby_exists:
+                print("[위험] 서버 튕김 또는 UI 이탈 감지! 매크로를 긴급 중지합니다.")
+                is_running = False
+                break
 
-    # 3단계: 조리 연타 및 완료 감지
-    hold_until_image_detected(sw_location, f_template=_f_template, timeout=SEARCH_TIMEOUT, cps=SW_CLICK_CPS, f_confidence=F_IMAGE_CONFIDENCE, check_interval=F_IMAGE_CHECK_INTERVAL)
+            # 조리 버튼(sw2.png) 연타 (실시간 조절된 CPS 반영)
+            sw_pos = find_image('sw2.png', threshold=0.75)
+            if sw_pos:
+                win32api.SetCursorPos(sw_pos)
+                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            
+            # CPS 기반 대기 시간 계산 (1초 / CPS)
+            sleep_duration = 1.0 / current_cps if current_cps > 0 else 0.03
+            time.sleep(sleep_duration)
 
-def worker_loop():
-    while not stop_program:
-        if running:
-            do_cycle()
-            time.sleep(LOOP_INTERVAL)
-        else:
-            time.sleep(0.05)
-
-def toggle_running():
-    global running
-    running = not running
-    print(f"\n===== {('시작' if running else '정지')} (F8) =====\n")
-
-def toggle_fast_click():
-    global fast_clicking
-    fast_clicking = not fast_clicking
-
-def fast_click_loop():
-    interval = 1.0 / CLICKS_PER_SECOND
-    while not stop_program:
-        if fast_clicking:
-            x, y = pyautogui.position()
-            fast_mouse_click(x, y)
-            time.sleep(interval)
-        else:
-            time.sleep(0.05)
-
-def exit_program():
-    global stop_program
-    global running
-    print('\n===== 종료 =====')
-    running = False
-    stop_program = True
-    _detection_flag.set()
-
-def main():
-    check_authorized_pc()
-    print('========================================')
-    print('nyong.exe 매크로 실행됨 (사람 속도 클릭 버전)')
-    print('F8: 시작 / 정지, F9: 종료')
-    print('========================================\n')
-    
-    keyboard.add_hotkey(TOGGLE_KEY, toggle_running)
-    keyboard.add_hotkey(FAST_CLICK_KEY, toggle_fast_click)
-    keyboard.add_hotkey(EXIT_KEY, exit_program)
-    
-    threading.Thread(target=worker_loop, daemon=True).start()
-    threading.Thread(target=fast_click_loop, daemon=True).start()
-    
-    while not stop_program:
         time.sleep(0.2)
 
+# ==================== 단축키 콜백 함수 ====================
+def toggle_macro():
+    global is_running
+    is_running = not is_running
+    if is_running:
+        print(f"\n[상태] 매크로가 시작되었습니다. (현재 CPS: {current_cps})")
+    else:
+        print("\n[상태] 매크로가 일시 정지되었습니다.")
+
+def terminate_program():
+    global is_terminated, is_running
+    is_running = False
+    is_terminated = True
+    print("\n[종료] 매크로 프로그램을 완전히 종료합니다.")
+    os._exit(0)
+
+# ==================== 진입점 (Main) ====================
 if __name__ == '__main__':
-    main()
+    check_images()
+    
+    # 핫키 등록
+    keyboard.add_hotkey('F8', toggle_macro)
+    keyboard.add_hotkey('F9', terminate_program)
+    keyboard.add_hotkey('F5', adjust_threshold_menu)
+    keyboard.add_hotkey('F6', decrease_cps)
+    keyboard.add_hotkey('F7', increase_cps)
+
+    # 백그라운드 스레드로 메인 루프 실행
+    t = threading.Thread(target=macro_loop)
+    t.daemon = True
+    t.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        terminate_program()
