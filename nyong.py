@@ -8,6 +8,7 @@ import mss
 import keyboard
 import win32api
 import win32con
+import ctypes
 
 # ==================== 설정 및 전역 변수 ====================
 is_running = False
@@ -27,6 +28,34 @@ REQUIRED_IMAGES = [
     'target2.png', 't2.png', 'bowl.png', 'sw2.png', 
     'f.png', 'sink.png', 'cutting_board.png', 'lobby.png'
 ]
+
+# ==================== 고성능 타이머 및 SendInput 설정 ====================
+try:
+    ctypes.windll.winmm.timeBeginPeriod(1)
+except Exception:
+    pass
+
+PUL = ctypes.POINTER(ctypes.c_ulong)
+class MouseInput(ctypes.Structure):
+    _fields_ = [('dx', ctypes.c_long), ('dy', ctypes.c_long), ('mouseData', ctypes.c_ulong), ('dwFlags', ctypes.c_ulong), ('time', ctypes.c_ulong), ('dwExtraInfo', PUL)]
+
+class Input_I(ctypes.Union):
+    _fields_ = [('mi', MouseInput)]
+
+class Input(ctypes.Structure):
+    _fields_ = [('type', ctypes.c_ulong), ('ii', Input_I)]
+
+def send_input_left_click():
+    extra = ctypes.c_ulong(0)
+    ii_down = Input_I()
+    ii_down.mi = MouseInput(0, 0, 0, win32con.MOUSEEVENTF_LEFTDOWN, 0, ctypes.pointer(extra))
+    x_down = Input(win32con.INPUT_MOUSE, ii_down)
+    ctypes.windll.user32.SendInput(1, ctypes.pointer(x_down), ctypes.sizeof(x_down))
+    
+    ii_up = Input_I()
+    ii_up.mi = MouseInput(0, 0, 0, win32con.MOUSEEVENTF_LEFTUP, 0, ctypes.pointer(extra))
+    x_up = Input(win32con.INPUT_MOUSE, ii_up)
+    ctypes.windll.user32.SendInput(1, ctypes.pointer(x_up), ctypes.sizeof(x_up))
 
 # ==================== 이미지 및 화면 함수 ====================
 def check_images():
@@ -159,7 +188,7 @@ def macro_loop():
             time.sleep(0.1)
             continue
 
-        # [단계 1 & 2] 제자리 우클릭으로 도마/싱크대 열기 및 감지
+        # [단계 1 & 2] 제자리 우클릭으로 도마/싱크대 열기 및 감지 (최대 3회 재시도, threshold_ui 사용)
         ui_opened = False
         retry_count = 0
         max_retries = 3
@@ -185,7 +214,7 @@ def macro_loop():
                 print(f"[경고] {retry_count}회 시도 실패: UI가 열리지 않았습니다.")
 
         if not ui_opened:
-            print("[알림] 도마/싱크대 UI를 열지 못해 매크로를 일시 정지합니다.")
+            print("[알림] 도마/싱크대 UI를 열지 못해 매크로를 일시 정지합니다. (위치/시선 확인 필요)")
             is_running = False
             continue
 
@@ -220,7 +249,7 @@ def macro_loop():
         print("[동작] 작물 우클릭 완료 (랜덤 0.1~0.2초). 0.5초 대기 및 그릇 소멸 검증 중...")
         time.sleep(0.5)
 
-        # [단계 5] 그릇 소멸 검증
+        # [단계 5] 그릇 소멸 검증 (bowl.png)
         bowl_check_start = time.time()
         while check_image_exists('bowl.png', threshold=0.80):
             if not is_running or is_terminated:
@@ -233,20 +262,57 @@ def macro_loop():
         if not is_running:
             continue
 
-        # [단계 6] 맨 처음 원본 방식의 순수 조리 연타
+        # [단계 6] 조리 연타 및 완료/튕김 감지 (백그라운드 감지 적용으로 초고속 CPS 유지)
         print("[진행] 재료 안착 확인. 조리 버튼 연타 시작...")
+        
+        # 완료 감지용 플래그
+        finish_event = threading.Event()
+        
+        def background_watcher():
+            while is_running and not is_terminated and not finish_event.is_set():
+                if check_image_exists('f.png', threshold=threshold_finish):
+                    finish_event.set()
+                    return
+                time.sleep(0.05)
 
-        sw_pos = find_image('sw2.png', threshold=0.80)
-        if sw_pos:
-            win32api.SetCursorPos(sw_pos)
+        watcher_thread = threading.Thread(target=background_watcher, daemon=True)
+        watcher_thread.start()
 
+        # 연타 루프 최적화 (정밀 타이머 제어)
+        next_click_time = time.perf_counter()
+        
         while is_running and not is_terminated:
-            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-            
-            sleep_duration = 1.0 / current_cps if current_cps > 0 else 0.03
-            time.sleep(sleep_duration)
+            if finish_event.is_set():
+                print("[완료] 조리 완료 이미지 감지! 다음 요리를 위해 처음으로 돌아갑니다.")
+                time.sleep(0.2)
+                break
 
+            # 튕김 방어
+            ui_exists = check_image_exists('cutting_board.png', threshold=threshold_ui) or check_image_exists('sink.png', threshold=threshold_ui)
+            lobby_exists = check_image_exists('lobby.png', threshold=0.80)
+
+            if not ui_exists or lobby_exists:
+                print("[위험] 서버 튕김 또는 UI 이탈 감지! 매크로를 긴급 중지합니다.")
+                is_running = False
+                break
+
+            # 조리 버튼(sw2.png) 위치 고정 후 초고속 연타
+            sw_pos = find_image('sw2.png', threshold=0.80)
+            if sw_pos:
+                win32api.SetCursorPos(sw_pos)
+
+            now = time.perf_counter()
+            click_interval = 1.0 / current_cps if current_cps > 0 else 0.015
+
+            if now >= next_click_time:
+                send_input_left_click()
+                next_click_time += click_interval
+                if next_click_time < now - click_interval:
+                    next_click_time = now + click_interval
+
+            time.sleep(0.0005)
+
+        finish_event.set()
         time.sleep(0.2)
 
 # ==================== 단축키 콜백 함수 ====================
@@ -262,6 +328,10 @@ def terminate_program():
     global is_terminated, is_running
     is_running = False
     is_terminated = True
+    try:
+        ctypes.windll.winmm.timeEndPeriod(1)
+    except Exception:
+        pass
     print("\n[종료] 매크로 프로그램을 완전히 종료합니다.")
     os._exit(0)
 
@@ -269,12 +339,14 @@ def terminate_program():
 if __name__ == '__main__':
     check_images()
     
+    # 핫키 등록
     keyboard.add_hotkey('F8', toggle_macro)
     keyboard.add_hotkey('F9', terminate_program)
     keyboard.add_hotkey('F5', adjust_threshold_menu)
     keyboard.add_hotkey('F6', decrease_cps)
     keyboard.add_hotkey('F7', increase_cps)
 
+    # 백그라운드 스레드로 메인 루프 실행
     t = threading.Thread(target=macro_loop)
     t.daemon = True
     t.start()
