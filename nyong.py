@@ -246,7 +246,7 @@ def macro_loop():
         time.sleep(0.05)
         human_right_click()
         print("[동작] 작물 우클릭 완료. 1.0초 대기 및 그릇 소멸 검증 중...")
-        time.sleep(1.0)
+        time.sleep(1.0) # 요청하신 1초 대기
 
         # [단계 5] 그릇 소멸 검증 (bowl.png)
         bowl_check_start = time.time()
@@ -261,7 +261,7 @@ def macro_loop():
         if not is_running:
             continue
 
-        # [단계 6] 조리 연타 및 동기식 f 감지 (연타 루프 내에서 간섭을 없애기 위해 인터벌 조절)
+        # [단계 6] 조리 버튼 위치 확인 및 독립된 초고속 연타 쓰레드 실행
         print("[진행] 재료 안착 확인. 조리 버튼 초고속 연타 시작...")
         
         sw_pos = find_image('sw2.png', threshold=0.80)
@@ -271,29 +271,43 @@ def macro_loop():
             print("[경고] 조리 버튼(sw2.png)을 찾지 못했습니다.")
             continue
 
-        next_click_time = time.perf_counter()
-        check_counter = 0
+        # 연타 전용 순수 백그라운드 스레드 (이미지 검사 일체 없음, 100% 순수 CPS 보장)
+        clicking_active = threading.Event()
+        clicking_active.set()
 
+        def pure_clicker():
+            next_click_time = time.perf_counter()
+            while clicking_active.is_set() and is_running and not is_terminated:
+                now = time.perf_counter()
+                click_interval = 1.0 / current_cps if current_cps > 0 else 0.015
+
+                if now >= next_click_time:
+                    send_input_left_click()
+                    next_click_time += click_interval
+                    if next_click_time < now - click_interval:
+                        next_click_time = now + click_interval
+                else:
+                    time.sleep(0.0002)
+
+        click_thread = threading.Thread(target=pure_clicker, daemon=True)
+        click_thread.start()
+
+        # 메인 루프에서는 오직 f.png 감지만 전담 (연타 속도에 0.001초의 영향도 주지 않음)
+        is_finished = False
         while is_running and not is_terminated:
-            # 연타 속도(CPS)를 최우선으로 내면서, 매 5회 클릭마다 단 한 번 빠르게 f.png를 검사하여 놓치지 않도록 함
-            check_counter += 1
-            if check_counter >= 5:
-                check_counter = 0
-                if check_image_exists('f.png', threshold=threshold_finish):
-                    print("[완료] 조리 완료 이미지 감지! 다음 요리를 위해 처음으로 돌아갑니다.")
-                    time.sleep(0.2)
-                    break
+            if check_image_exists('f.png', threshold=threshold_finish):
+                print("[완료] 조리 완료 이미지 감지! 다음 요리를 위해 처음으로 돌아갑니다.")
+                is_finished = True
+                break
+            time.sleep(0.05) # 감지 주기를 살짝 주어 CPU 과부하 방지 및 안정성 확보
 
-            now = time.perf_counter()
-            click_interval = 1.0 / current_cps if current_cps > 0 else 0.015
+        # 연타 스레드 종료 신호 전송
+        clicking_active.clear()
+        click_thread.join(timeout=0.5)
 
-            if now >= next_click_time:
-                send_input_left_click()
-                next_click_time += click_interval
-                if next_click_time < now - click_interval:
-                    next_click_time = now + click_interval
-
-            time.sleep(0.0005)
+        if is_finished:
+            time.sleep(0.2)
+            continue
 
 # ==================== 단축키 콜백 함수 ====================
 def toggle_macro():
