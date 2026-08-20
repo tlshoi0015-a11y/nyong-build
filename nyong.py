@@ -35,7 +35,7 @@ def check_images():
         print("스크립트 실행 전 동일 폴더에 이미지들을 준비해주세요.")
 
 def capture_screen():
-    with mss.mss() as sct:
+    with mss.MSS() as sct:
         monitor = sct.monitors[1]
         screenshot = sct.grab(monitor)
         img = np.array(screenshot)
@@ -145,11 +145,41 @@ def macro_loop():
             time.sleep(0.1)
             continue
 
-        print("[진행] 재료 탐색 시작...")
+        # ==================== [단계 1] 도마 / 싱크대 열기 ====================
+        print("[진행] 도마/싱크대 탐색 및 열기 시도...")
+        sink_pos = None
         start_time = time.time()
+
+        while is_running and not is_terminated:
+            # cutting_board.png 또는 sink.png 탐색
+            sink_pos = find_image('cutting_board.png', threshold=0.8)
+            if not sink_pos:
+                sink_pos = find_image('sink.png', threshold=0.8)
+            
+            if sink_pos:
+                break
+
+            if time.time() - start_time > 5.0:
+                print("[알림] 5초 동안 도마/싱크대를 찾지 못했습니다. 재시도합니다.")
+                start_time = time.time()
+
+            time.sleep(0.1)
+
+        if not is_running or sink_pos is None:
+            continue
+
+        # 도마/싱크대 우클릭하여 열기 (랜덤 타이밍 적용)
+        win32api.SetCursorPos(sink_pos)
+        time.sleep(0.05)
+        human_right_click()
+        print("[동작] 도마/싱크대 우클릭 완료. UI 오픈 대기 중...")
+        time.sleep(0.3)
+
+        # ==================== [단계 2] 작물 탐색 및 안착 ====================
+        print("[진행] 작물 재료 탐색 시작...")
+        search_start_time = time.time()
         target_pos = None
 
-        # 5초 타임아웃 루프 (재료 탐색)
         while is_running and not is_terminated:
             # 1순위: 작물 본체 이미지
             target_pos = find_image('target2.png', threshold=threshold_item)
@@ -162,7 +192,7 @@ def macro_loop():
                 break
 
             # 5초 초과 시 재료 소진으로 판단 후 중지
-            if time.time() - start_time > 5.0:
+            if time.time() - search_start_time > 5.0:
                 print("[알림] 5초 동안 재료나 설명탭을 찾지 못해 매크로를 중지합니다. (재료 소진)")
                 is_running = False
                 break
@@ -172,11 +202,11 @@ def macro_loop():
         if not is_running or target_pos is None:
             continue
 
-        # 제자리 우클릭 수행 (랜덤 타이밍 반영)
+        # 작물 제자리 우클릭 수행 (랜덤 타이밍 반영)
         win32api.SetCursorPos(target_pos)
         time.sleep(0.05)
         human_right_click()
-        print("[동작] 우클릭 완료 (랜덤 0.1~0.2초). 0.5초 대기 및 그릇 소멸 검증 중...")
+        print("[동작] 작물 우클릭 완료 (랜덤 0.1~0.2초). 0.5초 대기 및 그릇 소멸 검증 중...")
         time.sleep(0.5)
 
         # 그릇 소멸 검증 (bowl.png가 사라져야 정상 안착)
@@ -192,13 +222,15 @@ def macro_loop():
         if not is_running:
             continue
 
+        # ==================== [단계 3] 조리 버튼 연타 및 완료/튕김 감지 ====================
         print("[진행] 재료 안착 확인. 조리 버튼 연타 시작...")
+        cooking_success = False
 
-        # 조리 버튼 연타 및 UI 이탈(튕김) 감지 루프
         while is_running and not is_terminated:
             # 완료 이미지(f.png) 검증
             if check_image_exists('f.png', threshold=threshold_finish):
-                print("[완료] 조리 완료 이미지 감지! 다음 루프 파트로 넘어갑니다.")
+                print("[완료] 조리 완료 이미지 감지! 다음 루프(처음)로 넘어갑니다.")
+                cooking_success = True
                 time.sleep(0.2)
                 break
 
@@ -222,6 +254,7 @@ def macro_loop():
             sleep_duration = 1.0 / current_cps if current_cps > 0 else 0.03
             time.sleep(sleep_duration)
 
+        # 조리가 성공적으로 끝나면 루프가 처음(도마 열기)으로 되돌아가 무한 반복됩니다.
         time.sleep(0.2)
 
 # ==================== 단축키 콜백 함수 ====================
