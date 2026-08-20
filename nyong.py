@@ -46,7 +46,7 @@ current_cps = 65
 threshold_item = 0.80
 threshold_desc = 0.80
 threshold_ui = 0.65
-threshold_finish = 0.50  # 요청하신 대로 f.png 기본 감지 정확도 50% 설정
+threshold_finish = 0.50  # f.png 기본 감지 정확도 50%
 
 REQUIRED_IMAGES = [
     'target2.png', 't2.png', 'bowl.png', 'sw2.png', 
@@ -109,7 +109,7 @@ class ClickerThread(threading.Thread):
             pass
         
         while not is_terminated:
-            self.active.wait() # 신호가 올 때까지 대기 (CPU 0% 소모)
+            self.active.wait() 
             next_click = time.perf_counter()
             
             while self.active.is_set() and not is_terminated:
@@ -142,11 +142,11 @@ def macro_loop():
             time.sleep(0.1)
             continue
 
-        # 1 & 2. 도마/싱크대 열기 (3회 재시도)
+        # 1 & 2. 도마/싱크대 열기 (5회 재시도)
         ui_opened = False
-        for retry in range(1, 4):
+        for retry in range(1, 6):
             if not is_running or is_terminated: break
-            print(f"[동작] 도마/싱크대 열기 시도 ({retry}/3)...")
+            print(f"[동작] 도마/싱크대 열기 시도 ({retry}/5)...")
             human_right_click()
             
             start_t = time.time()
@@ -182,12 +182,12 @@ def macro_loop():
         print("[동작] 작물 우클릭 완료. 1.0초 대기 중...")
         time.sleep(1.0)
 
-        # 5. 그릇 소멸 검증
+        # 5. 그릇 소멸 검증 (타임아웃 0.7초로 단축)
         bowl_t = time.time()
         while check_image_exists('bowl.png', 0.80):
             if not is_running or is_terminated: break
-            if time.time() - bowl_t > 2.0: break
-            time.sleep(0.1)
+            if time.time() - bowl_t > 0.7: break
+            time.sleep(0.05)
 
         if not is_running: continue
 
@@ -213,7 +213,9 @@ def macro_loop():
         clicker.active.clear() # 연타 스레드 OFF
 
         if is_finished:
-            time.sleep(0.2)
+            # f 감지 후 안정적인 인식을 위해 0.5초 대기 후 다음 루프(도마/싱크대 열기)로 이동
+            print("[대기] f 감지 완료 후 0.5초 안정화 대기...")
+            time.sleep(0.5)
             continue
 
 # ==================== 단축키 및 진입점 ====================
