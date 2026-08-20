@@ -245,8 +245,8 @@ def macro_loop():
         win32api.SetCursorPos(target_pos)
         time.sleep(0.05)
         human_right_click()
-        print("[동작] 작물 우클릭 완료. 0.5초 대기 및 그릇 소멸 검증 중...")
-        time.sleep(0.5)
+        print("[동작] 작물 우클릭 완료. 1.0초 대기 및 그릇 소멸 검증 중...")
+        time.sleep(1.0) # 요청하신 대로 0.5초에서 1.0초로 변경
 
         # [단계 5] 그릇 소멸 검증 (bowl.png)
         bowl_check_start = time.time()
@@ -261,7 +261,7 @@ def macro_loop():
         if not is_running:
             continue
 
-        # [단계 6] 조리 연타 (연타 스레드와 감지 스레드 완전 분리로 완벽한 속도 보장)
+        # [단계 6] 조리 연타 (연타 스레드와 감지 스레드 완전 분리)
         print("[진행] 재료 안착 확인. 조리 버튼 초고속 연타 시작...")
         
         sw_pos = find_image('sw2.png', threshold=0.80)
@@ -273,18 +273,16 @@ def macro_loop():
 
         finish_event = threading.Event()
 
-        # 백그라운드에서 CPU 간섭 없이 초고속으로 f.png 감지
         def finish_watcher():
             while is_running and not is_terminated and not finish_event.is_set():
                 if check_image_exists('f.png', threshold=threshold_finish):
                     finish_event.set()
                     return
-                time.sleep(0.02) # 초고속 감지 주기로 즉각 포착
+                time.sleep(0.02)
 
         watcher_thread = threading.Thread(target=finish_watcher, daemon=True)
         watcher_thread.start()
 
-        # 오직 연타 속도만 전담하는 고성능 타이머 루프
         next_click_time = time.perf_counter()
         
         while is_running and not is_terminated:
