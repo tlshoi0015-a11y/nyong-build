@@ -10,21 +10,6 @@ import win32api
 import win32con
 import ctypes
 
-# ==================== 설정 및 전역 변수 ====================
-is_running = False
-is_terminated = False
-current_cps = 65
-
-threshold_item = 0.80
-threshold_desc = 0.80
-threshold_ui = 0.65
-threshold_finish = 0.80
-
-REQUIRED_IMAGES = [
-    'target2.png', 't2.png', 'bowl.png', 'sw2.png', 
-    'f.png', 'sink.png', 'cutting_board.png', 'lobby.png'
-]
-
 # ==================== 고성능 타이머 및 SendInput 설정 ====================
 try:
     ctypes.windll.winmm.timeBeginPeriod(1)
@@ -53,7 +38,21 @@ def send_input_left_click():
     x_up = Input(win32con.INPUT_MOUSE, ii_up)
     ctypes.windll.user32.SendInput(1, ctypes.pointer(x_up), ctypes.sizeof(x_up))
 
-# ==================== 이미지 및 화면 함수 ====================
+# ==================== 전역 변수 및 설정 ====================
+is_running = False
+is_terminated = False
+current_cps = 65
+
+threshold_item = 0.80
+threshold_desc = 0.80
+threshold_ui = 0.65
+threshold_finish = 0.50  # 요청하신 대로 f.png 기본 감지 정확도 50% 설정
+
+REQUIRED_IMAGES = [
+    'target2.png', 't2.png', 'bowl.png', 'sw2.png', 
+    'f.png', 'sink.png', 'cutting_board.png', 'lobby.png'
+]
+
 def check_images():
     missing = [img for img in REQUIRED_IMAGES if not os.path.exists(img)]
     if missing:
@@ -63,7 +62,8 @@ def capture_screen():
     with mss.MSS() as sct:
         monitor = sct.monitors[1]
         screenshot = sct.grab(monitor)
-        return cv2.cvtColor(np.array(screenshot), cv2.COLOR_BGRA2BGR)
+        img = np.array(screenshot)
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
 def find_image(template_name, threshold=0.8):
     if not os.path.exists(template_name):
@@ -95,69 +95,46 @@ def human_right_click():
     time.sleep(random.uniform(0.1, 0.2))
     win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
 
-# ==================== 핵심: 초고속 연타 + f 감지 하이브리드 스레드 ====================
-class PerfectCookRunner(threading.Thread):
+# ==================== 연타 전용 백그라운드 스레드 클래스 ====================
+class ClickerThread(threading.Thread):
     def __init__(self):
         super().__init__()
         self.daemon = True
         self.active = threading.Event()
 
     def run(self):
+        try:
+            ctypes.windll.winmm.timeBeginPeriod(1)
+        except Exception:
+            pass
+        
         while not is_terminated:
-            self.active.wait()
-            
-            # 조리 버튼(sw2.png) 위치 고정 확보
-            sw_pos = find_image('sw2.png', 0.80)
-            if sw_pos:
-                win32api.SetCursorPos(sw_pos)
-            else:
-                time.sleep(0.1)
-                continue
-
-            print("[진행] crong 스타일 초고속 연타 및 f.png 감시 동시 작동 중...")
-            
+            self.active.wait() # 신호가 올 때까지 대기 (CPU 0% 소모)
             next_click = time.perf_counter()
-            f_template = cv2.imread('f.png', cv2.IMREAD_COLOR)
             
-            # MSS 객체를 루프 외부에 선언하여 매번 생성하는 부하를 없앰 (속도 극대화)
-            with mss.MSS() as sct:
-                monitor = sct.monitors[1]
-                
-                while self.active.is_set() and is_running and not is_terminated:
-                    # 1. 초고속 좌클릭 타격 (CPS 엄수)
-                    now = time.perf_counter()
-                    interval = 1.0 / current_cps if current_cps > 0 else 0.015
+            while self.active.is_set() and not is_terminated:
+                if current_cps <= 0:
+                    time.sleep(0.01)
+                    continue
 
-                    if now >= next_click:
-                        send_input_left_click()
-                        next_click += interval
-                        if next_click < now - interval:
-                            next_click = now + interval
+                now = time.perf_counter()
+                interval = 1.0 / current_cps
 
-                    # 2. 연타 속도를 전혀 방해하지 않는 초경량 실시간 f.png 검사
-                    # (매 쿨타임마다 화면을 캡처하되 연타 타이밍을 건드리지 않음)
-                    try:
-                        screenshot = sct.grab(monitor)
-                        screen = cv2.cvtColor(np.array(screenshot), cv2.COLOR_BGRA2BGR)
-                        result = cv2.matchTemplate(screen, f_template, cv2.TM_CCOEFF_NORMED)
-                        _, max_val, _, _ = cv2.minMaxLoc(result)
-                        
-                        if max_val >= threshold_finish:
-                            print("[완료] 조리 완료 이미지(f.png) 감지 성공!")
-                            self.active.clear()
-                            break
-                    except Exception:
-                        pass
+                if now >= next_click:
+                    send_input_left_click()
+                    next_click += interval
+                    if next_click < now - interval:
+                        next_click = now + interval
+                else:
+                    time.sleep(0.0001)
 
-                    # CPU 점유율 폭주 방지를 위한 초미세 딜레이
-                    time.sleep(0.001)
-
-cook_runner = PerfectCookRunner()
-cook_runner.start()
+# 전역 연타 스레드 구동
+clicker = ClickerThread()
+clicker.start()
 
 # ==================== 메인 매크로 루프 ====================
 def macro_loop():
-    global is_running, is_terminated
+    global is_running, is_terminated, current_cps
     print("[안내] 매크로 대기 중... (F8: 시작/정지)")
 
     while not is_terminated:
@@ -214,14 +191,28 @@ def macro_loop():
 
         if not is_running: continue
 
-        # 6. 연타 및 f 감지 스레드 신호 ON
-        cook_runner.active.set()
+        # 6. 조리 버튼 위치 확인 후 '연타 스레드' 폭격 시작
+        sw_pos = find_image('sw2.png', 0.80)
+        if sw_pos:
+            win32api.SetCursorPos(sw_pos)
+        else:
+            continue
 
-        # 스레드가 f.png를 감지해서 `.active`를 끌 때까지 메인 루프는 대기
-        while cook_runner.active.is_set() and is_running and not is_terminated:
-            time.sleep(0.1)
+        print("[진행] 고속 연타 및 f.png 감시 시작...")
+        clicker.active.set() # 연타 스레드 ON
 
-        if is_running:
+        # 메인 루프에서는 오직 f.png 감지만 빠르게 수행
+        is_finished = False
+        while is_running and not is_terminated:
+            if check_image_exists('f.png', threshold_finish):
+                print(f"[완료] 조리 완료 이미지(f.png) 감지! (정확도: {int(threshold_finish*100)}%)")
+                is_finished = True
+                break
+            time.sleep(0.05)
+
+        clicker.active.clear() # 연타 스레드 OFF
+
+        if is_finished:
             time.sleep(0.2)
             continue
 
@@ -239,7 +230,7 @@ if __name__ == '__main__':
         global is_running, is_terminated
         is_running = False
         is_terminated = True
-        cook_runner.active.set()
+        clicker.active.set()
         print("\n[종료] 프로그램을 완전히 종료합니다.")
         os._exit(0)
 
@@ -254,25 +245,30 @@ if __name__ == '__main__':
         print(f"[속도] CPS 높임: {current_cps}")
 
     def adjust_threshold_menu():
-        global threshold_item, threshold_desc, threshold_ui
-        print("\n" + "="*40)
-        print(f" [정확도 설정] 본체: {int(threshold_item*100)}% | 설명탭: {int(threshold_desc*100)}% | UI: {int(threshold_ui*100)}%")
-        print("="*40)
-        choice = input("조절할 번호 입력 (1, 2, 3 / 취소는 엔터): ").strip()
-        if choice in ['1', '2', '3']:
-            print(" -> [Page Up]: +5% | [Page Down]: -5% | 그 외 키: 종료")
+        global threshold_item, threshold_desc, threshold_ui, threshold_finish
+        print("\n" + "="*50)
+        print(f" [정확도 설정]")
+        print(f" 1. 본체(target2): {int(threshold_item*100)}% | 2. 설명탭(t2): {int(threshold_desc*100)}%")
+        print(f" 3. UI(싱크/도마): {int(threshold_ui*100)}%   | 4. 완료(f.png): {int(threshold_finish*100)}%")
+        print("="*50)
+        choice = input("조절할 번호 입력 (1, 2, 3, 4 / 취소는 엔터): ").strip()
+        if choice in ['1', '2', '3', '4']:
+            target_name = {"1": "본체", "2": "설명탭", "3": "UI", "4": "완료(f.png)"}[choice]
+            print(f" -> [{target_name} 조절 중] [Page Up]: +5% | [Page Down]: -5% | 그 외 키: 종료")
             while True:
                 event = keyboard.read_event(suppress=True)
                 if event.event_type == keyboard.KEY_DOWN:
                     if event.name == 'page up':
                         if choice == '1': threshold_item = min(1.0, threshold_item + 0.05)
                         elif choice == '2': threshold_desc = min(1.0, threshold_desc + 0.05)
-                        else: threshold_ui = min(1.0, threshold_ui + 0.05)
+                        elif choice == '3': threshold_ui = min(1.0, threshold_ui + 0.05)
+                        else: threshold_finish = min(1.0, threshold_finish + 0.05)
                         print("정확도 5% 증가")
                     elif event.name == 'page down':
                         if choice == '1': threshold_item = max(0.1, threshold_item - 0.05)
                         elif choice == '2': threshold_desc = max(0.1, threshold_desc - 0.05)
-                        else: threshold_ui = max(0.1, threshold_ui - 0.05)
+                        elif choice == '3': threshold_ui = max(0.1, threshold_ui - 0.05)
+                        else: threshold_finish = max(0.1, threshold_finish - 0.05)
                         print("정확도 5% 감소")
                     else:
                         break
@@ -283,6 +279,7 @@ if __name__ == '__main__':
     keyboard.add_hotkey('F6', decrease_cps)
     keyboard.add_hotkey('F7', increase_cps)
 
+    # 메인 루프 실행
     threading.Thread(target=macro_loop, daemon=True).start()
 
     try:
