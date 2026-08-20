@@ -103,7 +103,6 @@ def check_image_exists(template_name, threshold=0.8):
 
 # ==================== 마우스 조작 함수 ====================
 def human_right_click():
-    """ 0.1초 ~ 0.2초 사이의 랜덤한 유지 시간을 가진 우클릭 """
     win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
     sleep_time = random.uniform(0.1, 0.2)
     time.sleep(sleep_time)
@@ -188,7 +187,7 @@ def macro_loop():
             time.sleep(0.1)
             continue
 
-        # [단계 1 & 2] 제자리 우클릭으로 도마/싱크대 열기 및 감지 (최대 3회 재시도, threshold_ui 사용)
+        # [단계 1 & 2] 도마/싱크대 열기 및 감지
         ui_opened = False
         retry_count = 0
         max_retries = 3
@@ -214,7 +213,7 @@ def macro_loop():
                 print(f"[경고] {retry_count}회 시도 실패: UI가 열리지 않았습니다.")
 
         if not ui_opened:
-            print("[알림] 도마/싱크대 UI를 열지 못해 매크로를 일시 정지합니다. (위치/시선 확인 필요)")
+            print("[알림] 도마/싱크대 UI를 열지 못해 매크로를 일시 정지합니다.")
             is_running = False
             continue
 
@@ -233,7 +232,7 @@ def macro_loop():
                 break
 
             if time.time() - search_start_time > 5.0:
-                print("[알림] 5초 동안 재료나 설명탭을 찾지 못해 매크로를 중지합니다. (재료 소진)")
+                print("[알림] 5초 동안 재료나 설명탭을 찾지 못해 매크로를 중지합니다.")
                 is_running = False
                 break
             
@@ -246,7 +245,7 @@ def macro_loop():
         win32api.SetCursorPos(target_pos)
         time.sleep(0.05)
         human_right_click()
-        print("[동작] 작물 우클릭 완료 (랜덤 0.1~0.2초). 0.5초 대기 및 그릇 소멸 검증 중...")
+        print("[동작] 작물 우클릭 완료. 0.5초 대기 및 그릇 소멸 검증 중...")
         time.sleep(0.5)
 
         # [단계 5] 그릇 소멸 검증 (bowl.png)
@@ -262,10 +261,16 @@ def macro_loop():
         if not is_running:
             continue
 
-        # [단계 6] 조리 연타 및 완료/튕김 감지 (백그라운드 감지 적용으로 초고속 CPS 유지)
-        print("[진행] 재료 안착 확인. 조리 버튼 연타 시작...")
+        # [단계 6] 조리 연타 (속도 저하 방지: sw2.png 위치를 한 번만 찾고 고속 연타)
+        print("[진행] 재료 안착 확인. 조리 버튼 초고속 연타 시작...")
         
-        # 완료 감지용 플래그
+        sw_pos = find_image('sw2.png', threshold=0.80)
+        if sw_pos:
+            win32api.SetCursorPos(sw_pos)
+        else:
+            print("[경고] 조리 버튼(sw2.png)을 찾지 못했습니다.")
+            continue
+
         finish_event = threading.Event()
         
         def background_watcher():
@@ -273,12 +278,11 @@ def macro_loop():
                 if check_image_exists('f.png', threshold=threshold_finish):
                     finish_event.set()
                     return
-                time.sleep(0.05)
+                time.sleep(0.1)
 
         watcher_thread = threading.Thread(target=background_watcher, daemon=True)
         watcher_thread.start()
 
-        # 연타 루프 최적화 (정밀 타이머 제어)
         next_click_time = time.perf_counter()
         
         while is_running and not is_terminated:
@@ -286,20 +290,6 @@ def macro_loop():
                 print("[완료] 조리 완료 이미지 감지! 다음 요리를 위해 처음으로 돌아갑니다.")
                 time.sleep(0.2)
                 break
-
-            # 튕김 방어
-            ui_exists = check_image_exists('cutting_board.png', threshold=threshold_ui) or check_image_exists('sink.png', threshold=threshold_ui)
-            lobby_exists = check_image_exists('lobby.png', threshold=0.80)
-
-            if not ui_exists or lobby_exists:
-                print("[위험] 서버 튕김 또는 UI 이탈 감지! 매크로를 긴급 중지합니다.")
-                is_running = False
-                break
-
-            # 조리 버튼(sw2.png) 위치 고정 후 초고속 연타
-            sw_pos = find_image('sw2.png', threshold=0.80)
-            if sw_pos:
-                win32api.SetCursorPos(sw_pos)
 
             now = time.perf_counter()
             click_interval = 1.0 / current_cps if current_cps > 0 else 0.015
@@ -339,14 +329,12 @@ def terminate_program():
 if __name__ == '__main__':
     check_images()
     
-    # 핫키 등록
     keyboard.add_hotkey('F8', toggle_macro)
     keyboard.add_hotkey('F9', terminate_program)
     keyboard.add_hotkey('F5', adjust_threshold_menu)
     keyboard.add_hotkey('F6', decrease_cps)
     keyboard.add_hotkey('F7', increase_cps)
 
-    # 백그라운드 스레드로 메인 루프 실행
     t = threading.Thread(target=macro_loop)
     t.daemon = True
     t.start()
