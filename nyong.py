@@ -159,7 +159,7 @@ def macro_loop():
             time.sleep(0.1)
             continue
 
-        # [단계 1 & 2] 제자리 우클릭으로 도마/싱크대 열기 및 감지 (최대 3회 재시도, threshold_ui 사용)
+        # [단계 1 & 2] 제자리 우클릭으로 도마/싱크대 열기 및 감지 (최대 3회 재시도)
         ui_opened = False
         retry_count = 0
         max_retries = 3
@@ -241,14 +241,20 @@ def macro_loop():
         # [단계 6] 조리 연타 및 완료/튕김 감지
         print("[진행] 재료 안착 확인. 조리 버튼 연타 시작...")
 
+        # 그릇 소멸 확인 후, 조리 버튼(sw2.png) 위치로 마우스 1회 이동
+        sw_pos = find_image('sw2.png', threshold=0.80)
+        if sw_pos:
+            win32api.SetCursorPos(sw_pos)
+
+        # 딜레이 없는 다이렉트 연타 루프
         while is_running and not is_terminated:
-            # 완료 이미지(f.png) 감지되면 성공적으로 끝내고 루프 처음(우클릭)으로 이동
+            # 완료 이미지(f.png) 감지 시 연타 중단 후 다음 요리로 이동
             if check_image_exists('f.png', threshold=threshold_finish):
                 print("[완료] 조리 완료 이미지 감지! 다음 요리를 위해 처음으로 돌아갑니다.")
                 time.sleep(0.2)
                 break
 
-            # 튕김 방어: UI가 사라졌거나 로비 화면 감지 시 긴급 정지 (threshold_ui 적용)
+            # 튕김 방어: UI가 사라졌거나 로비 화면 감지 시 긴급 정지
             ui_exists = check_image_exists('cutting_board.png', threshold=threshold_ui) or check_image_exists('sink.png', threshold=threshold_ui)
             lobby_exists = check_image_exists('lobby.png', threshold=0.80)
 
@@ -257,14 +263,11 @@ def macro_loop():
                 is_running = False
                 break
 
-            # 조리 버튼(sw2.png) 연타
-            sw_pos = find_image('sw2.png', threshold=0.80)
-            if sw_pos:
-                win32api.SetCursorPos(sw_pos)
-                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            # 클릭 후 설정된 CPS에 따른 지연만 발생 (이미지 재검색 지연 제거)
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             
-            sleep_duration = 1.0 / current_cps if current_cps > 0 else 0.03
+            sleep_duration = 1.0 / current_cps if current_cps > 0 else 0.01
             time.sleep(sleep_duration)
 
         time.sleep(0.2)
