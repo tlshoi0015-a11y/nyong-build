@@ -13,9 +13,10 @@ import win32con
 is_running = False
 is_terminated = False
 
-# 인식 정확도 설정 (초기값 80%)
+# 인식 정확도 설정
 threshold_item = 0.80   # 1번: 작물 본체 (target2.png)
 threshold_desc = 0.80   # 2번: 작물 설명탭 (t2.png)
+threshold_ui = 0.65     # 3번: 도마/싱크대 UI (cutting_board.png / sink.png) - 기본값 65%
 threshold_finish = 0.80 # 완성 멘트 (f.png)
 
 # 연타 속도 (CPS) 설정 (최소 10, 최대 100, 초기값 65)
@@ -81,17 +82,24 @@ def human_right_click():
 
 # ==================== 실시간 조절 단축키 기능 ====================
 def adjust_threshold_menu():
-    global threshold_item, threshold_desc
+    global threshold_item, threshold_desc, threshold_ui
     print("\n" + "="*40)
     print(" [정확도 설정 메뉴]")
     print(f" 1. 작물 본체 (target2.png) 현재 정확도: {int(threshold_item * 100)}%")
     print(f" 2. 작물 설명탭 (t2.png) 현재 정확도: {int(threshold_desc * 100)}%")
+    print(f" 3. 도마/싱크대 UI (cutting_board/sink.png) 현재 정확도: {int(threshold_ui * 100)}%")
     print("="*40)
     
-    choice = input("조절할 항목의 번호를 입력하세요 (1 또는 2, 취소는 다른 아무 키나 엔터): ").strip()
+    choice = input("조절할 항목의 번호를 입력하세요 (1, 2, 3 / 취소는 엔터): ").strip()
     
-    if choice in ['1', '2']:
-        target_name = "작물 본체" if choice == '1' else "작물 설명탭"
+    if choice in ['1', '2', '3']:
+        if choice == '1':
+            target_name = "작물 본체"
+        elif choice == '2':
+            target_name = "작물 설명탭"
+        else:
+            target_name = "도마/싱크대 UI"
+
         print(f"\n[{target_name}] 조절 모드 활성화됨")
         print(" -> [Page Up]: 5% 올리기 (+)")
         print(" -> [Page Down]: 5% 내리기 (-)")
@@ -104,16 +112,22 @@ def adjust_threshold_menu():
                     if choice == '1':
                         threshold_item = min(1.0, threshold_item + 0.05)
                         print(f" -> 작물 본체 정확도: {int(threshold_item * 100)}%")
-                    else:
+                    elif choice == '2':
                         threshold_desc = min(1.0, threshold_desc + 0.05)
                         print(f" -> 작물 설명탭 정확도: {int(threshold_desc * 100)}%")
+                    else:
+                        threshold_ui = min(1.0, threshold_ui + 0.05)
+                        print(f" -> 도마/싱크대 UI 정확도: {int(threshold_ui * 100)}%")
                 elif event.name == 'page down':
                     if choice == '1':
                         threshold_item = max(0.1, threshold_item - 0.05)
                         print(f" -> 작물 본체 정확도: {int(threshold_item * 100)}%")
-                    else:
+                    elif choice == '2':
                         threshold_desc = max(0.1, threshold_desc - 0.05)
                         print(f" -> 작물 설명탭 정확도: {int(threshold_desc * 100)}%")
+                    else:
+                        threshold_ui = max(0.1, threshold_ui - 0.05)
+                        print(f" -> 도마/싱크대 UI 정확도: {int(threshold_ui * 100)}%")
                 else:
                     print("[설정 완료] 메뉴를 나갑니다.\n")
                     break
@@ -132,7 +146,7 @@ def increase_cps():
 
 # ==================== 메인 매크로 루프 ====================
 def macro_loop():
-    global is_running, threshold_item, threshold_desc, threshold_finish, current_cps
+    global is_running, threshold_item, threshold_desc, threshold_ui, threshold_finish, current_cps
     print("[안내] 매크로 대기 중...")
     print("[단축키 안내]")
     print(" - F8: 시작 / 정지")
@@ -145,7 +159,7 @@ def macro_loop():
             time.sleep(0.1)
             continue
 
-        # [단계 1 & 2] 제자리 우클릭으로 도마/싱크대 열기 및 감지 (최대 3회 재시도, 기준 정확도 80%)
+        # [단계 1 & 2] 제자리 우클릭으로 도마/싱크대 열기 및 감지 (최대 3회 재시도, threshold_ui 사용)
         ui_opened = False
         retry_count = 0
         max_retries = 3
@@ -160,7 +174,7 @@ def macro_loop():
             while time.time() - ui_check_start < 3.0:
                 if not is_running or is_terminated:
                     break
-                if check_image_exists('cutting_board.png', threshold=0.80) or check_image_exists('sink.png', threshold=0.80):
+                if check_image_exists('cutting_board.png', threshold=threshold_ui) or check_image_exists('sink.png', threshold=threshold_ui):
                     print("[진행] 도마/싱크대 UI 열림 확인됨.")
                     ui_opened = True
                     break
@@ -177,7 +191,7 @@ def macro_loop():
             is_running = False
             continue
 
-        # [단계 3] 작물 우선순위 탐색 (1순위 target2 / 2순위 t2, 초기값 80% 적용)
+        # [단계 3] 작물 우선순위 탐색
         print("[진행] 재료 탐색 시작...")
         search_start_time = time.time()
         target_pos = None
@@ -204,14 +218,14 @@ def macro_loop():
         if not is_running or target_pos is None:
             continue
 
-        # [단계 4] 작물 우클릭 안착 (0.1초~0.2초 유지)
+        # [단계 4] 작물 우클릭 안착
         win32api.SetCursorPos(target_pos)
         time.sleep(0.05)
         human_right_click()
         print("[동작] 작물 우클릭 완료 (랜덤 0.1~0.2초). 0.5초 대기 및 그릇 소멸 검증 중...")
         time.sleep(0.5)
 
-        # [단계 5] 그릇 소멸 검증 (bowl.png, 기준 정확도 80%)
+        # [단계 5] 그릇 소멸 검증 (bowl.png)
         bowl_check_start = time.time()
         while check_image_exists('bowl.png', threshold=0.80):
             if not is_running or is_terminated:
@@ -228,14 +242,14 @@ def macro_loop():
         print("[진행] 재료 안착 확인. 조리 버튼 연타 시작...")
 
         while is_running and not is_terminated:
-            # 완료 이미지(f.png) 감지되면 성공적으로 끝내고 루프 처음(우클릭)으로 이동 (기본 80%)
+            # 완료 이미지(f.png) 감지되면 성공적으로 끝내고 루프 처음(우클릭)으로 이동
             if check_image_exists('f.png', threshold=threshold_finish):
                 print("[완료] 조리 완료 이미지 감지! 다음 요리를 위해 처음으로 돌아갑니다.")
                 time.sleep(0.2)
                 break
 
-            # 튕김 방어: UI가 사라졌거나 로비 화면 감지 시 긴급 정지 (기본 80%)
-            ui_exists = check_image_exists('cutting_board.png', threshold=0.80) or check_image_exists('sink.png', threshold=0.80)
+            # 튕김 방어: UI가 사라졌거나 로비 화면 감지 시 긴급 정지 (threshold_ui 적용)
+            ui_exists = check_image_exists('cutting_board.png', threshold=threshold_ui) or check_image_exists('sink.png', threshold=threshold_ui)
             lobby_exists = check_image_exists('lobby.png', threshold=0.80)
 
             if not ui_exists or lobby_exists:
@@ -243,7 +257,7 @@ def macro_loop():
                 is_running = False
                 break
 
-            # 조리 버튼(sw2.png) 연타 (기본 80%)
+            # 조리 버튼(sw2.png) 연타
             sw_pos = find_image('sw2.png', threshold=0.80)
             if sw_pos:
                 win32api.SetCursorPos(sw_pos)
