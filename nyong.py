@@ -261,7 +261,7 @@ def macro_loop():
         if not is_running:
             continue
 
-        # [단계 6] 조리 연타 및 완료 감지
+        # [단계 6] 조리 연타 (연타 스레드와 감지 스레드 완전 분리)
         print("[진행] 재료 안착 확인. 조리 버튼 초고속 연타 시작...")
         
         sw_pos = find_image('sw2.png', threshold=0.80)
@@ -271,19 +271,27 @@ def macro_loop():
             print("[경고] 조리 버튼(sw2.png)을 찾지 못했습니다.")
             continue
 
-        next_click_time = time.perf_counter()
-        click_count = 0
-        is_finished = False
+        finish_event = threading.Event()
 
-        while is_running and not is_terminated:
-            # 연타 속도(CPS)를 최우선으로 유지하면서 매 10클릭마다 f.png 감지 (안정적인 주기)
-            click_count += 1
-            if click_count >= 10:
-                click_count = 0
+        # 연타 루프에 영향을 주지 않도록 독립된 백그라운드 스레드에서 f.png 감지
+        def finish_watcher():
+            while is_running and not is_terminated and not finish_event.is_set():
                 if check_image_exists('f.png', threshold=threshold_finish):
-                    print("[완료] 조리 완료 이미지 감지! 다음 요리를 위해 처음으로 돌아갑니다.")
-                    is_finished = True
-                    break
+                    finish_event.set()
+                    return
+                time.sleep(0.01)
+
+        watcher_thread = threading.Thread(target=finish_watcher, daemon=True)
+        watcher_thread.start()
+
+        # 오직 연타 속도만 전담하는 고성능 타이머 루프 (CPS 저하 원천 차단)
+        next_click_time = time.perf_counter()
+        
+        while is_running and not is_terminated:
+            if finish_event.is_set():
+                print("[완료] 조리 완료 이미지 감지! 다음 요리를 위해 처음으로 돌아갑니다.")
+                time.sleep(0.2)
+                break
 
             now = time.perf_counter()
             click_interval = 1.0 / current_cps if current_cps > 0 else 0.015
@@ -296,9 +304,8 @@ def macro_loop():
 
             time.sleep(0.0005)
 
-        if is_finished:
-            time.sleep(0.2)
-            continue
+        finish_event.set()
+        time.sleep(0.2)
 
 # ==================== 단축키 콜백 함수 ====================
 def toggle_macro():
