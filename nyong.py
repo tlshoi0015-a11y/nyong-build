@@ -261,7 +261,7 @@ def macro_loop():
         if not is_running:
             continue
 
-        # [단계 6] 조리 연타 (속도 저하 방지: sw2.png 위치를 한 번만 찾고 고속 연타)
+        # [단계 6] 조리 연타 및 고속 완료 감지 (crong 스타일 병행 검사)
         print("[진행] 재료 안착 확인. 조리 버튼 초고속 연타 시작...")
         
         sw_pos = find_image('sw2.png', threshold=0.80)
@@ -271,25 +271,19 @@ def macro_loop():
             print("[경고] 조리 버튼(sw2.png)을 찾지 못했습니다.")
             continue
 
-        finish_event = threading.Event()
-        
-        def background_watcher():
-            while is_running and not is_terminated and not finish_event.is_set():
-                if check_image_exists('f.png', threshold=threshold_finish):
-                    finish_event.set()
-                    return
-                time.sleep(0.1)
-
-        watcher_thread = threading.Thread(target=background_watcher, daemon=True)
-        watcher_thread.start()
-
         next_click_time = time.perf_counter()
-        
+        click_count = 0
+        is_finished = False
+
         while is_running and not is_terminated:
-            if finish_event.is_set():
-                print("[완료] 조리 완료 이미지 감지! 다음 요리를 위해 처음으로 돌아갑니다.")
-                time.sleep(0.2)
-                break
+            # 연타를 방해하지 않으면서 일정 횟수(약 10클릭마다 한번씩) 고속으로 f.png 감지 체크
+            click_count += 1
+            if click_count >= 10:
+                click_count = 0
+                if check_image_exists('f.png', threshold=threshold_finish):
+                    print("[완료] 조리 완료 이미지 감지! 다음 요리를 위해 처음으로 돌아갑니다.")
+                    is_finished = True
+                    break
 
             now = time.perf_counter()
             click_interval = 1.0 / current_cps if current_cps > 0 else 0.015
@@ -302,8 +296,9 @@ def macro_loop():
 
             time.sleep(0.0005)
 
-        finish_event.set()
-        time.sleep(0.2)
+        if is_finished:
+            time.sleep(0.2)
+            continue
 
 # ==================== 단축키 콜백 함수 ====================
 def toggle_macro():
