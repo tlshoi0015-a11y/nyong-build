@@ -47,7 +47,6 @@ threshold_item = 0.80
 threshold_desc = 0.80
 threshold_ui = 0.65
 threshold_finish = 0.50  # f.png 기본 감지 정확도 50%
-bowl_timeout = 0.7       # 그릇 감지 타임아웃 기본 0.7초
 
 REQUIRED_IMAGES = [
     'target2.png', 't2.png', 'bowl.png', 'sw2.png', 
@@ -135,7 +134,7 @@ clicker.start()
 
 # ==================== 메인 매크로 루프 ====================
 def macro_loop():
-    global is_running, is_terminated, current_cps, bowl_timeout
+    global is_running, is_terminated, current_cps
     print("[안내] 매크로 대기 중... (F8: 시작/정지)")
 
     while not is_terminated:
@@ -183,11 +182,11 @@ def macro_loop():
         print("[동작] 작물 우클릭 완료. 0.7초 대기 중...")
         time.sleep(0.7)
 
-        # 5. 그릇 소멸 검증 (F5로 조절 가능한 bowl_timeout 적용)
+        # 5. 곧바로 그릇 소멸 검증 (타임아웃 0.7초)
         bowl_t = time.time()
         while check_image_exists('bowl.png', 0.80):
             if not is_running or is_terminated: break
-            if time.time() - bowl_t > bowl_timeout: break
+            if time.time() - bowl_t > 0.7: break
             time.sleep(0.05)
 
         if not is_running: continue
@@ -214,6 +213,7 @@ def macro_loop():
         clicker.active.clear() # 연타 스레드 OFF
 
         if is_finished:
+            # f 감지 후 안정적인 인식을 위해 0.5초 대기 후 다음 루프(도마/싱크대 열기)로 이동
             print("[대기] f 감지 완료 후 0.5초 안정화 대기...")
             time.sleep(0.5)
             continue
@@ -247,18 +247,16 @@ if __name__ == '__main__':
         print(f"[속도] CPS 높임: {current_cps}")
 
     def adjust_threshold_menu():
-        global threshold_item, threshold_desc, threshold_ui, threshold_finish, bowl_timeout
-        print("\n" + "="*55)
-        print(f" [설정 메뉴]")
+        global threshold_item, threshold_desc, threshold_ui, threshold_finish
+        print("\n" + "="*50)
+        print(f" [정확도 설정]")
         print(f" 1. 본체(target2): {int(threshold_item*100)}% | 2. 설명탭(t2): {int(threshold_desc*100)}%")
         print(f" 3. UI(싱크/도마): {int(threshold_ui*100)}%   | 4. 완료(f.png): {int(threshold_finish*100)}%")
-        print(f" 5. 그릇 감지 시간: {bowl_timeout:.1f}초")
-        print("="*55)
-        choice = input("조절할 번호 입력 (1, 2, 3, 4, 5 / 취소는 엔터): ").strip()
-        if choice in ['1', '2', '3', '4', '5']:
-            target_name = {"1": "본체", "2": "설명탭", "3": "UI", "4": "완료(f.png)", "5": "그릇 감지 시간"}[choice]
-            step_desc = "+0.1초 / -0.1초" if choice == '5' else "+5% / -5%"
-            print(f" -> [{target_name} 조절 중] [Page Up]: 증가({step_desc}) | [Page Down]: 감소({step_desc}) | 그 외 키: 종료")
+        print("="*50)
+        choice = input("조절할 번호 입력 (1, 2, 3, 4 / 취소는 엔터): ").strip()
+        if choice in ['1', '2', '3', '4']:
+            target_name = {"1": "본체", "2": "설명탭", "3": "UI", "4": "완료(f.png)"}[choice]
+            print(f" -> [{target_name} 조절 중] [Page Up]: +5% | [Page Down]: -5% | 그 외 키: 종료")
             while True:
                 event = keyboard.read_event(suppress=True)
                 if event.event_type == keyboard.KEY_DOWN:
@@ -266,16 +264,14 @@ if __name__ == '__main__':
                         if choice == '1': threshold_item = min(1.0, threshold_item + 0.05)
                         elif choice == '2': threshold_desc = min(1.0, threshold_desc + 0.05)
                         elif choice == '3': threshold_ui = min(1.0, threshold_ui + 0.05)
-                        elif choice == '4': threshold_finish = min(1.0, threshold_finish + 0.05)
-                        elif choice == '5': bowl_timeout = round(min(5.0, bowl_timeout + 0.1), 1)
-                        print(f"값 증가 -> 현재: {bowl_timeout if choice == '5' else int(eval(f'threshold_{[\"item\", \"desc\", \"ui\", \"finish\"][int(choice)-1]}')*100)}%{'초' if choice=='5' else '%'}")
+                        else: threshold_finish = min(1.0, threshold_finish + 0.05)
+                        print("정확도 5% 증가")
                     elif event.name == 'page down':
                         if choice == '1': threshold_item = max(0.1, threshold_item - 0.05)
                         elif choice == '2': threshold_desc = max(0.1, threshold_desc - 0.05)
                         elif choice == '3': threshold_ui = max(0.1, threshold_ui - 0.05)
-                        elif choice == '4': threshold_finish = max(0.1, threshold_finish - 0.05)
-                        elif choice == '5': bowl_timeout = round(max(0.1, bowl_timeout - 0.1), 1)
-                        print(f"값 감소 -> 현재: {bowl_timeout if choice == '5' else int(eval(f'threshold_{[\"item\", \"desc\", \"ui\", \"finish\"][int(choice)-1]}')*100)}%{'초' if choice=='5' else '%'}")
+                        else: threshold_finish = max(0.1, threshold_finish - 0.05)
+                        print("정확도 5% 감소")
                     else:
                         break
 
