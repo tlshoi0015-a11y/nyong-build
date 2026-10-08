@@ -40,7 +40,7 @@ def send_input_left_click():
     x_up = Input(win32con.INPUT_MOUSE, ii_up)
     ctypes.windll.user32.SendInput(1, ctypes.pointer(x_up), ctypes.sizeof(x_up))
 
-# ==================== 전역 변수 및 설정 ====================
+# ==================== 다지기 전역 변수 및 설정 ====================
 is_running = False
 is_terminated = False
 current_cps = 65
@@ -49,6 +49,10 @@ threshold_item = 0.80
 threshold_desc = 0.80
 threshold_ui = 0.65
 threshold_finish = 0.50
+
+# ==================== 고기 전역 변수 및 설정 (독립 제어) ====================
+is_meat_running = False
+is_meat_terminated = False
 
 REQUIRED_IMAGES = [
     'target2.png', 't2.png', 'bowl.png', 'sw2.png', 
@@ -98,7 +102,7 @@ def human_right_click():
     time.sleep(random.uniform(0.1, 0.2))
     win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
 
-# ==================== 고기(pig) 관련 원본 코드 (코드 수정 없음) ====================
+# ==================== 고기(pig) 관련 원본 코드 (내부 로직 변경 없음) ====================
 def get_base_dir():
     if getattr(sys, 'frozen', False):
         return os.path.dirname(os.path.abspath(sys.executable))
@@ -190,9 +194,10 @@ def find_on_screen(image_path, confidence=0.8, check_color=False, tolerance=30):
         return (center_x, center_y)
     return None
 
+# 고기 루프 (is_meat_running 및 is_meat_terminated로 독립 제어)
 def meat_macro_loop():
-    while not is_terminated:
-        if not is_running:
+    while not is_meat_terminated:
+        if not is_meat_running:
             time.sleep(0.1)
             continue
             
@@ -247,7 +252,9 @@ clicker.start()
 # ==================== 메인 다지기 매크로 루프 ====================
 def macro_loop():
     global is_running, is_terminated, current_cps
-    print("[안내] 매크로 대기 중... (F1: 시작, F2: 종료)")
+    print("[안내] 매크로 대기 중...")
+    print(" - 다지기: F8 (시작/정지), F9 (종료), F5 (정확도), F6/F7 (속도)")
+    print(" - 고기:   F1 (시작/정지), F2 (종료)")
 
     while not is_terminated:
         if not is_running:
@@ -327,24 +334,85 @@ def macro_loop():
 if __name__ == '__main__':
     check_images()
 
-    def start_macro():
+    # 다지기 제어 함수 (F8, F9 등 원본 그대로)
+    def toggle_macro():
         global is_running
-        if not is_running:
-            is_running = True
-            print("\n[상태] 매크로가 시작되었습니다. (F1: 시작 / F2: 종료)")
+        is_running = not is_running
+        status = "시작되었습니다." if is_running else "일시 정지되었습니다."
+        print(f"\n[다지기] 매크로가 {status} (현재 CPS: {current_cps})")
 
     def terminate_program():
         global is_running, is_terminated
         is_running = False
         is_terminated = True
         clicker.active.set()
-        print("\n[종료] 프로그램을 완전히 종료합니다.")
+        print("\n[다지기] 프로그램을 완전히 종료합니다.")
         os._exit(0)
 
-    keyboard.add_hotkey('F1', start_macro)
-    keyboard.add_hotkey('F2', terminate_program)
+    def decrease_cps():
+        global current_cps
+        current_cps = max(10, current_cps - 1)
+        print(f"[속도] CPS 낮춤: {current_cps}")
 
-    # 두 가지 매크로 루프를 각각 백그라운드 스레드로 동시 구동
+    def increase_cps():
+        global current_cps
+        current_cps = min(100, current_cps + 1)
+        print(f"[속도] CPS 높임: {current_cps}")
+
+    def adjust_threshold_menu():
+        global threshold_item, threshold_desc, threshold_ui, threshold_finish
+        print("\n" + "="*50)
+        print(f" [정확도 설정]")
+        print(f" 1. 본체(target2): {int(threshold_item*100)}% | 2. 설명탭(t2): {int(threshold_desc*100)}%")
+        print(f" 3. UI(싱크/도마): {int(threshold_ui*100)}%    | 4. 완료(f.png): {int(threshold_finish*100)}%")
+        print("="*50)
+        choice = input("조절할 번호 입력 (1, 2, 3, 4 / 취소는 엔터): ").strip()
+        if choice in ['1', '2', '3', '4']:
+            target_name = {"1": "본체", "2": "설명탭", "3": "UI", "4": "완료(f.png)"}[choice]
+            print(f" -> [{target_name} 조절 중] [Page Up]: +5% | [Page Down]: -5% | 그 외 키: 종료")
+            while True:
+                event = keyboard.read_event(suppress=True)
+                if event.event_type == keyboard.KEY_DOWN:
+                    if event.name == 'page up':
+                        if choice == '1': threshold_item = min(1.0, threshold_item + 0.05)
+                        elif choice == '2': threshold_desc = min(1.0, threshold_desc + 0.05)
+                        elif choice == '3': threshold_ui = min(1.0, threshold_ui + 0.05)
+                        else: threshold_finish = min(1.0, threshold_finish + 0.05)
+                        print("정확도 5% 증가")
+                    elif event.name == 'page down':
+                        if choice == '1': threshold_item = max(0.1, threshold_item - 0.05)
+                        elif choice == '2': threshold_desc = max(0.1, threshold_desc - 0.05)
+                        elif choice == '3': threshold_ui = max(0.1, threshold_ui - 0.05)
+                        else: threshold_finish = max(0.1, threshold_finish - 0.05)
+                        print("정확도 5% 감소")
+                    else:
+                        break
+
+    # 고기 제어 함수 (F1, F2 전용)
+    def toggle_meat_macro():
+        global is_meat_running
+        is_meat_running = not is_meat_running
+        status = "시작되었습니다." if is_meat_running else "일시 정지되었습니다."
+        print(f"\n[고기] 매크로가 {status} (F1: 시작/정지, F2: 종료)")
+
+    def terminate_meat_macro():
+        global is_meat_running, is_meat_terminated
+        is_meat_running = False
+        is_meat_terminated = True
+        print("\n[고기] 매크로가 완전히 종료되었습니다.")
+
+    # 다지기 단축키 등록
+    keyboard.add_hotkey('F8', toggle_macro)
+    keyboard.add_hotkey('F9', terminate_program)
+    keyboard.add_hotkey('F5', adjust_threshold_menu)
+    keyboard.add_hotkey('F6', decrease_cps)
+    keyboard.add_hotkey('F7', increase_cps)
+
+    # 고기 단축키 등록 (요청하신 F1, F2)
+    keyboard.add_hotkey('F1', toggle_meat_macro)
+    keyboard.add_hotkey('F2', terminate_meat_macro)
+
+    # 두 가지 매크로 루프를 각각 독립된 스레드로 구동
     threading.Thread(target=macro_loop, daemon=True).start()
     threading.Thread(target=meat_macro_loop, daemon=True).start()
 
