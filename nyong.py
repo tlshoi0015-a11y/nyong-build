@@ -1,16 +1,18 @@
 import os
+import sys
 import time
 import threading
 import random
 import cv2
 import numpy as np
 import mss
+import pyautogui
 import keyboard
 import win32api
 import win32con
 import ctypes
 
-# ==================== 고성능 타이머 및 SendInput 설정 ====================
+# ==================== 고성능 타이머 및 SendInput 설정 (다지기용) ====================
 try:
     ctypes.windll.winmm.timeBeginPeriod(1)
 except Exception:
@@ -46,11 +48,12 @@ current_cps = 65
 threshold_item = 0.80
 threshold_desc = 0.80
 threshold_ui = 0.65
-threshold_finish = 0.50  # f.png 기본 감지 정확도 50%
+threshold_finish = 0.50
 
 REQUIRED_IMAGES = [
     'target2.png', 't2.png', 'bowl.png', 'sw2.png', 
-    'f.png', 'sink.png', 'cutting_board.png', 'lobby.png'
+    'f.png', 'sink.png', 'cutting_board.png', 'lobby.png',
+    'pig.png', 'meat_done.png'
 ]
 
 def check_images():
@@ -95,6 +98,116 @@ def human_right_click():
     time.sleep(random.uniform(0.1, 0.2))
     win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
 
+# ==================== 고기(pig) 관련 원본 코드 (코드 수정 없음) ====================
+def get_base_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+RICE_IMG = 'pig.png'
+DONE_RICE_IMG = 'meat_done.png'
+COLOR_TOLERANCE = 30
+COLOR_MATCH_THRESHOLD = 0.8
+FAILSAFE = False
+POLL_INTERVAL = 0.1
+LOOP_DELAY = 0.5
+SCRIPT_DIR = get_base_dir()
+
+def check_image_files():
+    if not os.path.isfile(os.path.join(SCRIPT_DIR, RICE_IMG)):
+        return False
+    if not os.path.isfile(os.path.join(SCRIPT_DIR, DONE_RICE_IMG)):
+        return False
+    return True
+
+def safe_click(pos, duration=0.1, button='left', pre_delay=0.05, post_down_delay=0.05):
+    pyautogui.moveTo(pos[0], pos[1], duration=duration)
+    time.sleep(pre_delay)
+    pyautogui.mouseDown(button=button)
+    time.sleep(post_down_delay)
+    pyautogui.mouseUp(button=button)
+
+def color_matches(template_path, screen_region, tolerance=30):
+    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+    if template is None:
+        return False
+    
+    x, y, w, h = screen_region
+    screen = pyautogui.screenshot(region=(x, y, w, h))
+    screen = cv2.cvtColor(np.array(screen), cv2.COLOR_RGB2BGR)
+    
+    if screen.shape != template.shape:
+        template = cv2.resize(template, (w, h))
+        
+    diff = cv2.absdiff(screen, template)
+    diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    mean_diff = np.mean(diff)
+    
+    return mean_diff <= tolerance
+
+def find_on_screen(image_path, confidence=0.8, check_color=False, tolerance=30):
+    if not os.path.exists(image_path):
+        return None
+        
+    template = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    if template is None:
+        return None
+        
+    screen = pyautogui.screenshot()
+    screen = cv2.cvtColor(np.array(screen), cv2.COLOR_RGB2BGR)
+    
+    result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
+    locations = np.where(result >= confidence)
+    
+    template_h, template_w, _ = template.shape
+    candidates = []
+    
+    for pt in zip(*locations[::-1]):
+        score = result[pt[1], pt[0]]
+        candidates.append((pt[0], pt[1], score))
+        
+    candidates.sort(key=lambda x: x[2], reverse=True)
+    checked = set()
+    
+    for cx, cy, score in candidates:
+        duplicate = False
+        for ccx, ccy in checked:
+            if abs(cx - ccx) < template_w and abs(cy - ccy) < template_h:
+                duplicate = True
+                break
+        if duplicate:
+            continue
+            
+        checked.add((cx, cy))
+        center_x = cx + template_w // 2
+        center_y = cy + template_h // 2
+        
+        if check_color:
+            region = (cx, cy, template_w, template_h)
+            if not color_matches(image_path, region, tolerance):
+                continue
+                
+        return (center_x, center_y)
+    return None
+
+def meat_macro_loop():
+    while not is_terminated:
+        if not is_running:
+            time.sleep(0.1)
+            continue
+            
+        rice_pos = find_on_screen(os.path.join(SCRIPT_DIR, RICE_IMG), confidence=0.8)
+        if rice_pos:
+            safe_click(rice_pos, button='right')
+            time.sleep(0.7)
+            
+        done_pos = find_on_screen(os.path.join(SCRIPT_DIR, DONE_RICE_IMG), confidence=0.5)
+        if done_pos:
+            safe_click(done_pos, button='left')
+            time.sleep(0.5)
+            
+        time.sleep(0.1)
+
 # ==================== 연타 전용 백그라운드 스레드 클래스 ====================
 class ClickerThread(threading.Thread):
     def __init__(self):
@@ -128,21 +241,19 @@ class ClickerThread(threading.Thread):
                 else:
                     time.sleep(0.0001)
 
-# 전역 연타 스레드 구동
 clicker = ClickerThread()
 clicker.start()
 
-# ==================== 메인 매크로 루프 ====================
+# ==================== 메인 다지기 매크로 루프 ====================
 def macro_loop():
     global is_running, is_terminated, current_cps
-    print("[안내] 매크로 대기 중... (F8: 시작/정지)")
+    print("[안내] 매크로 대기 중... (F1: 시작, F2: 종료)")
 
     while not is_terminated:
         if not is_running:
             time.sleep(0.1)
             continue
 
-        # 1 & 2. 도마/싱크대 열기 (5회 재시도)
         ui_opened = False
         for retry in range(1, 6):
             if not is_running or is_terminated: break
@@ -162,7 +273,6 @@ def macro_loop():
             is_running = False
             continue
 
-        # 3. 작물 탐색
         target_pos = None
         search_t = time.time()
         while is_running and not is_terminated:
@@ -175,14 +285,12 @@ def macro_loop():
 
         if not is_running or not target_pos: continue
 
-        # 4. 우클릭 및 0.7초 대기
         win32api.SetCursorPos(target_pos)
         time.sleep(0.05)
         human_right_click()
         print("[동작] 작물 우클릭 완료. 0.7초 대기 중...")
         time.sleep(0.7)
 
-        # 5. 곧바로 그릇 소멸 검증 (타임아웃 0.7초)
         bowl_t = time.time()
         while check_image_exists('bowl.png', 0.80):
             if not is_running or is_terminated: break
@@ -191,7 +299,6 @@ def macro_loop():
 
         if not is_running: continue
 
-        # 6. 조리 버튼 위치 확인 후 '연타 스레드' 폭격 시작
         sw_pos = find_image('sw2.png', 0.80)
         if sw_pos:
             win32api.SetCursorPos(sw_pos)
@@ -199,9 +306,8 @@ def macro_loop():
             continue
 
         print("[진행] 고속 연타 및 f.png 감시 시작...")
-        clicker.active.set() # 연타 스레드 ON
+        clicker.active.set()
 
-        # 메인 루프에서는 오직 f.png 감지만 빠르게 수행
         is_finished = False
         while is_running and not is_terminated:
             if check_image_exists('f.png', threshold_finish):
@@ -210,10 +316,9 @@ def macro_loop():
                 break
             time.sleep(0.05)
 
-        clicker.active.clear() # 연타 스레드 OFF
+        clicker.active.clear()
 
         if is_finished:
-            # f 감지 후 안정적인 인식을 위해 0.5초 대기 후 다음 루프(도마/싱크대 열기)로 이동
             print("[대기] f 감지 완료 후 0.5초 안정화 대기...")
             time.sleep(0.5)
             continue
@@ -222,11 +327,11 @@ def macro_loop():
 if __name__ == '__main__':
     check_images()
 
-    def toggle_macro():
+    def start_macro():
         global is_running
-        is_running = not is_running
-        status = "시작되었습니다." if is_running else "일시 정지되었습니다."
-        print(f"\n[상태] 매크로가 {status} (현재 CPS: {current_cps})")
+        if not is_running:
+            is_running = True
+            print("\n[상태] 매크로가 시작되었습니다. (F1: 시작 / F2: 종료)")
 
     def terminate_program():
         global is_running, is_terminated
@@ -236,53 +341,12 @@ if __name__ == '__main__':
         print("\n[종료] 프로그램을 완전히 종료합니다.")
         os._exit(0)
 
-    def decrease_cps():
-        global current_cps
-        current_cps = max(10, current_cps - 1)
-        print(f"[속도] CPS 낮춤: {current_cps}")
+    keyboard.add_hotkey('F1', start_macro)
+    keyboard.add_hotkey('F2', terminate_program)
 
-    def increase_cps():
-        global current_cps
-        current_cps = min(100, current_cps + 1)
-        print(f"[속도] CPS 높임: {current_cps}")
-
-    def adjust_threshold_menu():
-        global threshold_item, threshold_desc, threshold_ui, threshold_finish
-        print("\n" + "="*50)
-        print(f" [정확도 설정]")
-        print(f" 1. 본체(target2): {int(threshold_item*100)}% | 2. 설명탭(t2): {int(threshold_desc*100)}%")
-        print(f" 3. UI(싱크/도마): {int(threshold_ui*100)}%   | 4. 완료(f.png): {int(threshold_finish*100)}%")
-        print("="*50)
-        choice = input("조절할 번호 입력 (1, 2, 3, 4 / 취소는 엔터): ").strip()
-        if choice in ['1', '2', '3', '4']:
-            target_name = {"1": "본체", "2": "설명탭", "3": "UI", "4": "완료(f.png)"}[choice]
-            print(f" -> [{target_name} 조절 중] [Page Up]: +5% | [Page Down]: -5% | 그 외 키: 종료")
-            while True:
-                event = keyboard.read_event(suppress=True)
-                if event.event_type == keyboard.KEY_DOWN:
-                    if event.name == 'page up':
-                        if choice == '1': threshold_item = min(1.0, threshold_item + 0.05)
-                        elif choice == '2': threshold_desc = min(1.0, threshold_desc + 0.05)
-                        elif choice == '3': threshold_ui = min(1.0, threshold_ui + 0.05)
-                        else: threshold_finish = min(1.0, threshold_finish + 0.05)
-                        print("정확도 5% 증가")
-                    elif event.name == 'page down':
-                        if choice == '1': threshold_item = max(0.1, threshold_item - 0.05)
-                        elif choice == '2': threshold_desc = max(0.1, threshold_desc - 0.05)
-                        elif choice == '3': threshold_ui = max(0.1, threshold_ui - 0.05)
-                        else: threshold_finish = max(0.1, threshold_finish - 0.05)
-                        print("정확도 5% 감소")
-                    else:
-                        break
-
-    keyboard.add_hotkey('F8', toggle_macro)
-    keyboard.add_hotkey('F9', terminate_program)
-    keyboard.add_hotkey('F5', adjust_threshold_menu)
-    keyboard.add_hotkey('F6', decrease_cps)
-    keyboard.add_hotkey('F7', increase_cps)
-
-    # 메인 루프 실행
+    # 두 가지 매크로 루프를 각각 백그라운드 스레드로 동시 구동
     threading.Thread(target=macro_loop, daemon=True).start()
+    threading.Thread(target=meat_macro_loop, daemon=True).start()
 
     try:
         while True:
